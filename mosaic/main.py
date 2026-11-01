@@ -14,12 +14,8 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .db import Base, engine, get_db
+from .db import get_db
 from .models import Application, AuditEvent, DataObject, DataRecord, Organisation, Workflow
-
-# Transitional bootstrap for the preview. A versioned migration system is required
-# before production rollout; create_all does not upgrade existing schemas.
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="MOSAIC Platform",
