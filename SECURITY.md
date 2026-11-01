@@ -15,7 +15,7 @@ Set all three variables together:
 
 MOSAIC verifies JWT signatures against JWKS, restricts algorithms to RS256/ES256, validates issuer and audience, and requires exp/iat/sub/iss/aud. The stable internal user key is a SHA-256 digest of issuer plus subject; email is not used as an identity key.
 
-When any OIDC variable is set, Basic preview authentication is disabled. Incomplete OIDC configuration fails closed. An OIDC provider and a browser PKCE login flow still need to be configured/implemented before the hosted web UI can be used as a multi-user product. Do not enable OIDC on the current Render service until that flow and provider configuration are ready.
+When any OIDC variable is set, Basic preview authentication is disabled. Incomplete OIDC configuration fails closed. The repository now includes a Keycloak realm, a local self-hosted Keycloak + PostgreSQL Compose service, and a browser Authorization Code + PKCE (S256) client. The browser validates state and the OIDC nonce, exchanges codes without a client secret, refreshes tokens and supports logout. The browser client stores tokens in tab-scoped sessionStorage; this is suitable only for local development and is not the preferred production architecture. Do not enable OIDC on the current Render service until a production identity provider, HTTPS issuer, public client redirect URI, durable PostgreSQL runtime and RLS tests are configured.
 
 ## Tenant isolation
 
@@ -29,7 +29,7 @@ Do not publish exploit details in a public issue. Use GitHub's private vulnerabi
 
 ## Required before production use
 
-- Browser OIDC Authorization Code + PKCE login, logout, session renewal and CSRF-safe token handling.
+- Production browser token architecture (prefer backend-for-frontend with HttpOnly/SameSite cookies), CSP/XSS controls, and hardened session lifecycle.
 - MFA policy and identity-provider configuration.
 - Invitation lifecycle, membership revocation and full role/permission administration.
 - Separate migration owner and least-privilege runtime database role; verify no BYPASSRLS.
