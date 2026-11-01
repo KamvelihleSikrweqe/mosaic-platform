@@ -8,7 +8,9 @@ os.environ["MOSAIC_PREVIEW_PASSWORD"] = "test-password"
 
 from fastapi.testclient import TestClient
 from mosaic.main import app
+from mosaic.db import Base, engine
 
+Base.metadata.create_all(bind=engine)
 client = TestClient(app)
 H = {"Authorization": "Basic " + base64.b64encode(b"owner:test-password").decode()}
 
