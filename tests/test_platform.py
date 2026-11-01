@@ -120,3 +120,25 @@ def test_schema_validated_record_crud_and_tenant_isolation():
     assert client.get(f"/api/v1/objects/{object_id}/records", headers=ha).json()[0]["id"] == record_id
     assert client.delete(f"/api/v1/records/{record_id}", headers=ha).status_code == 204
     assert client.get(f"/api/v1/records/{record_id}", headers=ha).status_code == 404
+
+
+def test_supplier_demo_seed_is_idempotent():
+    first = client.post("/api/v1/demo/supplier-onboarding", headers=H)
+    assert first.status_code == 200, first.text
+    result = first.json()
+    assert result["organisation"]["slug"] == "mosaic-demo"
+    assert result["data_object"]["key"] == "supplier"
+    assert result["application"]["status"] == "draft"
+    assert result["workflow"]["enabled"] is False
+    assert result["records_created"] == 2
+
+    second = client.post("/api/v1/demo/supplier-onboarding", headers=H)
+    assert second.status_code == 200, second.text
+    assert second.json()["organisation"]["id"] == result["organisation"]["id"]
+    assert second.json()["records_created"] == 0
+    headers = {**H, "X-Organisation-ID": result["organisation"]["id"]}
+    records = client.get(
+        f"/api/v1/objects/{result['data_object']['id']}/records", headers=headers
+    )
+    assert records.status_code == 200
+    assert len(records.json()) == 2
