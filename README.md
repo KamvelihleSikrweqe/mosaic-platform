@@ -82,3 +82,20 @@ See `docs/ARCHITECTURE.md`, the product vision, roadmap and `SECURITY.md`.
 ## Licence
 
 A formal repository-wide open-source licence is still to be confirmed. Do not assume a licence grant until the maintainer adds and reviews the applicable licence file.
+
+
+## Multi-user login with Keycloak (local self-hosted)
+
+The Compose stack can run a local Keycloak identity provider and the MOSAIC browser client. This is a **local development configuration**, not a hardened internet-facing identity deployment.
+
+1. Copy `.env.example` to `.env` and replace all three Keycloak password placeholders with unique random secrets.
+2. Import the supplied `keycloak/realm-mosaic.json` realm automatically when Keycloak starts.
+3. Run `docker compose up --build`.
+4. Open `http://localhost:8000`. Select **Sign in** and authenticate using a user you create in the Keycloak admin console at `http://localhost:8080/admin`.
+5. Create an organisation. Your Keycloak issuer+subject identity becomes its owner. Invite colleagues using the invitation API once email verification is enabled for their accounts.
+
+The browser uses Authorization Code + PKCE (S256), validates the OAuth state and OIDC nonce, and keeps tokens in tab-scoped session storage. The browser client is public and has no client secret. The API validates access-token signature, issuer and audience using Keycloak JWKS.
+
+The realm includes a protocol mapper that adds the `mosaic-api` audience to access tokens. The local Keycloak URL and redirect URI are configured for localhost only. For a real deployment, use HTTPS, a stable public issuer, production Keycloak mode behind a trusted reverse proxy, a managed/durable Keycloak database, strict redirect URI and web-origin allowlists, secure secrets, MFA and account recovery policies. Update `OIDC_ISSUER`, `OIDC_JWKS_URL`, `OIDC_REDIRECT_URI`, and the realm client's redirect URI/web origin together. The issuer claim must match `OIDC_ISSUER` exactly.
+
+Do not enable OIDC on the existing Render preview until its issuer, audience, JWKS URL, client ID, HTTPS redirect URI and durable PostgreSQL runtime are configured and tested. OIDC mode intentionally disables the shared Basic preview login.
