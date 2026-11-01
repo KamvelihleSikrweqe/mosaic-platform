@@ -115,3 +115,16 @@ class WorkflowRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class ApplicationRelease(Base):
+    __tablename__ = "application_releases"
+    __table_args__ = (UniqueConstraint("app_id", "version", "environment", name="uq_app_release_version_environment"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organisations.id", ondelete="CASCADE"), index=True)
+    app_id: Mapped[str] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(nullable=False)
+    environment: Mapped[str] = mapped_column(String(30), nullable=False, default="development")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="ready")
+    manifest: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
