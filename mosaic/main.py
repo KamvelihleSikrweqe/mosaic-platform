@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .auth import Principal, get_current_principal, oidc_enabled
-from .models import Application, AuditEvent, DataObject, DataRecord, Organisation, OrganisationMembership, OrganisationInvitation, Workflow, WorkflowRun
+from .models import Application, ApplicationRelease, AuditEvent, DataObject, DataRecord, Organisation, OrganisationMembership, OrganisationInvitation, Workflow, WorkflowRun
 
 app = FastAPI(
     title="MOSAIC Platform",
@@ -106,6 +106,17 @@ class AppIn(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     description: str = Field(default="", max_length=4000)
     config: dict = Field(default_factory=dict)
+
+
+class AppUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=4000)
+    config: dict
+    expected_version: int = Field(ge=1)
+
+
+class ReleaseIn(BaseModel):
+    environment: str = Field(pattern=r"^(development|staging|production)$")
 
 
 class WorkflowIn(BaseModel):
@@ -781,8 +792,60 @@ def delete_record(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+def validate_application_manifest(config: dict, org_id: str, db: Session):
+    if not isinstance(config, dict):
+        raise HTTPException(422, "Application manifest must be a JSON object")
+    schema_version = config.get("schemaVersion", "1.0")
+    if schema_version != "1.0":
+        raise HTTPException(422, "Unsupported application manifest schemaVersion")
+    pages = config.get("pages", [])
+    if not isinstance(pages, list) or len(pages) > 30:
+        raise HTTPException(422, "Application pages must be an array with at most 30 entries")
+    allowed_pages = {"dashboard", "data-list", "data-form"}
+    allowed_components = {"heading", "text", "metric", "data-table", "data-form", "button"}
+    object_keys = {
+        item.key for item in db.scalars(select(DataObject).where(DataObject.org_id == org_id)).all()
+    }
+    for page_index, page in enumerate(pages, start=1):
+        if not isinstance(page, dict):
+            raise HTTPException(422, f"Page {page_index} must be an object")
+        if page.get("type", "dashboard") not in allowed_pages:
+            raise HTTPException(422, f"Unsupported page type at position {page_index}")
+        source = page.get("dataSource")
+        if source and source not in object_keys:
+            raise HTTPException(422, f"Page {page_index} references unknown data model '{source}'")
+        components = page.get("components", [])
+        if not isinstance(components, list) or len(components) > 100:
+            raise HTTPException(422, f"Page {page_index} must have at most 100 components")
+        for component_index, component in enumerate(components, start=1):
+            if not isinstance(component, dict) or component.get("type") not in allowed_components:
+                raise HTTPException(422, f"Unsupported component at page {page_index}, position {component_index}")
+            props = component.get("props", {})
+            if not isinstance(props, dict) or len(str(props)) > 8000:
+                raise HTTPException(422, "Component props must be a small JSON object")
+            if component.get("binding"):
+                binding = component["binding"]
+                if not isinstance(binding, dict) or binding.get("object") not in object_keys:
+                    raise HTTPException(422, "Component data binding references an unknown data model")
+            action = component.get("action")
+            if action:
+                if not isinstance(action, dict) or action.get("type") != "workflow.run":
+                    raise HTTPException(422, "Only the governed workflow.run action is currently supported")
+                workflow_id = action.get("workflowId")
+                workflow = db.scalar(select(Workflow).where(
+                    Workflow.id == workflow_id, Workflow.org_id == org_id, Workflow.enabled.is_(True)
+                ))
+                if not workflow:
+                    raise HTTPException(422, "Workflow actions must reference an enabled workflow in this organisation")
+                action_input = action.get("input", {})
+                if not isinstance(action_input, dict) or len(str(action_input)) > 4000:
+                    raise HTTPException(422, "Workflow action input must be a small JSON object")
+    return config
+
+
 @app.post("/api/v1/apps", dependencies=[Depends(require_token)], status_code=201)
 def create_app(payload: AppIn, org: Organisation = Depends(org_scope), db: Session = Depends(get_db)):
+    validate_application_manifest(payload.config, org.id, db)
     item = Application(
         id=str(uuid4()), org_id=org.id, name=payload.name,
         description=payload.description, config=payload.config, status="draft",
@@ -849,16 +912,109 @@ def get_application_runtime(
     }
 
 
+
+@app.put("/api/v1/apps/{app_id}", dependencies=[Depends(require_token)])
+def update_app(
+    app_id: str, payload: AppUpdateIn,
+    org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    item = db.scalar(select(Application).where(
+        Application.id == app_id, Application.org_id == org.id
+    ))
+    if not item:
+        raise HTTPException(404, "Application not found")
+    if item.version != payload.expected_version:
+        raise HTTPException(409, "Application version changed. Reload before saving.")
+    validate_application_manifest(payload.config, org.id, db)
+    item.config = payload.config
+    if payload.name is not None:
+        item.name = payload.name
+    if payload.description is not None:
+        item.description = payload.description
+    item.version += 1
+    audit(db, org.id, "application.updated", "application", item.id, {"version": item.version})
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "name": item.name, "description": item.description,
+            "config": item.config, "status": item.status, "version": item.version}
+
+
+@app.get("/api/v1/apps/{app_id}/releases", dependencies=[Depends(require_token)])
+def list_app_releases(
+    app_id: str, org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    item = db.scalar(select(Application.id).where(
+        Application.id == app_id, Application.org_id == org.id
+    ))
+    if not item:
+        raise HTTPException(404, "Application not found")
+    releases = db.scalars(select(ApplicationRelease).where(
+        ApplicationRelease.app_id == app_id, ApplicationRelease.org_id == org.id
+    ).order_by(ApplicationRelease.version.desc(), ApplicationRelease.created_at.desc())).all()
+    return [{"id": release.id, "version": release.version, "environment": release.environment,
+             "status": release.status, "created_at": release.created_at}
+            for release in releases]
+
+
+@app.post("/api/v1/apps/{app_id}/releases", dependencies=[Depends(require_token)], status_code=201)
+def create_app_release(
+    app_id: str, payload: ReleaseIn,
+    org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    item = db.scalar(select(Application).where(
+        Application.id == app_id, Application.org_id == org.id
+    ))
+    if not item:
+        raise HTTPException(404, "Application not found")
+    validate_application_manifest(item.config, org.id, db)
+    item.version += 1
+    release = ApplicationRelease(
+        id=str(uuid4()), org_id=org.id, app_id=item.id, version=item.version,
+        environment=payload.environment, status="ready", manifest=item.config,
+    )
+    db.add(release)
+    if payload.environment == "production":
+        item.status = "published"
+    audit(db, org.id, "application.released", "application_release", release.id,
+          {"app_id": item.id, "version": release.version, "environment": release.environment})
+    db.commit()
+    return {"id": release.id, "app_id": item.id, "version": release.version,
+            "environment": release.environment, "status": release.status}
+
+
+@app.get("/api/v1/apps/{app_id}/releases/{release_id}", dependencies=[Depends(require_token)])
+def get_app_release(
+    app_id: str, release_id: str,
+    org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    release = db.scalar(select(ApplicationRelease).where(
+        ApplicationRelease.id == release_id, ApplicationRelease.app_id == app_id,
+        ApplicationRelease.org_id == org.id,
+    ))
+    if not release:
+        raise HTTPException(404, "Application release not found")
+    return {"id": release.id, "app_id": release.app_id, "version": release.version,
+            "environment": release.environment, "status": release.status,
+            "manifest": release.manifest, "created_at": release.created_at}
+
+
 @app.post("/api/v1/apps/{app_id}/publish", dependencies=[Depends(require_token)])
 def publish_app(app_id: str, org: Organisation = Depends(org_scope), db: Session = Depends(get_db)):
     item = db.scalar(select(Application).where(Application.id == app_id, Application.org_id == org.id))
     if not item:
         raise HTTPException(404, "Application not found")
-    item.status = "published"
+    validate_application_manifest(item.config, org.id, db)
     item.version += 1
-    audit(db, org.id, "application.published", "application", item.id, {"version": item.version})
+    release = ApplicationRelease(
+        id=str(uuid4()), org_id=org.id, app_id=item.id, version=item.version,
+        environment="production", status="ready", manifest=item.config,
+    )
+    db.add(release)
+    item.status = "published"
+    audit(db, org.id, "application.published", "application", item.id,
+          {"version": item.version, "release_id": release.id, "environment": "production"})
     db.commit()
-    return {"id": item.id, "status": item.status, "version": item.version}
+    return {"id": item.id, "status": item.status, "version": item.version, "release_id": release.id}
 
 
 def validate_workflow_definition(definition: dict):
