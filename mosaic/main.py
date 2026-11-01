@@ -20,7 +20,8 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .auth import Principal, get_current_principal, oidc_enabled
-from .models import Application, ApplicationRelease, AuditEvent, DataObject, DataRecord, Organisation, OrganisationMembership, OrganisationInvitation, Workflow, WorkflowRun
+from .models import Application, ApplicationRelease, ApplicationDeployment, AuditEvent, DataObject, DataRecord, Organisation, OrganisationMembership, OrganisationInvitation, Workflow, WorkflowRun
+from .deployment_contract import create_deployment_plan
 
 app = FastAPI(
     title="MOSAIC Platform",
@@ -119,6 +120,13 @@ class AppUpdateIn(BaseModel):
 
 class ReleaseIn(BaseModel):
     environment: str = Field(pattern=r"^(development|staging|production)$")
+
+
+class DeploymentIn(BaseModel):
+    release_id: str = Field(min_length=36, max_length=36)
+    environment: str = Field(pattern=r"^(development|staging|production)$")
+    provider: str = Field(default="docker", pattern=r"^docker$")
+    target: str = Field(default="local", min_length=1, max_length=120, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._:-]*$")
 
 
 class WorkflowIn(BaseModel):
@@ -1061,6 +1069,91 @@ def publish_app(app_id: str, org: Organisation = Depends(org_scope), db: Session
           {"version": item.version, "release_id": release.id, "environment": "production"})
     db.commit()
     return {"id": item.id, "status": item.status, "version": item.version, "release_id": release.id}
+
+
+def deployment_payload(item: ApplicationDeployment):
+    return {
+        "id": item.id, "app_id": item.app_id, "release_id": item.release_id,
+        "environment": item.environment, "provider": item.provider, "target": item.target,
+        "status": item.status, "health_status": item.health_status,
+        "artifact_digest": item.artifact_digest, "deployment_url": item.deployment_url,
+        "error_message": item.error_message, "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
+
+
+@app.post("/api/v1/apps/{app_id}/deployments", dependencies=[Depends(require_token)], status_code=201)
+def create_application_deployment(
+    app_id: str, payload: DeploymentIn,
+    org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    app_item = db.scalar(select(Application).where(
+        Application.id == app_id, Application.org_id == org.id
+    ))
+    if not app_item:
+        raise HTTPException(404, "Application not found")
+    release = db.scalar(select(ApplicationRelease).where(
+        ApplicationRelease.id == payload.release_id,
+        ApplicationRelease.app_id == app_id,
+        ApplicationRelease.org_id == org.id,
+        ApplicationRelease.environment == payload.environment,
+        ApplicationRelease.status == "ready",
+    ))
+    if not release:
+        raise HTTPException(404, "Ready release not found in the requested environment")
+    try:
+        plan = create_deployment_plan(payload.provider, payload.target, release.manifest)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    deployment = ApplicationDeployment(
+        id=str(uuid4()), org_id=org.id, app_id=app_id, release_id=release.id,
+        environment=payload.environment, provider=plan.provider, target=plan.target,
+        status="planned", health_status="not_started", artifact_digest=plan.artifact_digest,
+    )
+    db.add(deployment)
+    audit(db, org.id, "application.deployment_planned", "application_deployment", deployment.id, {
+        "app_id": app_id, "release_id": release.id, "environment": payload.environment,
+        "provider": plan.provider, "target": plan.target, "artifact_digest": plan.artifact_digest,
+    })
+    db.commit()
+    db.refresh(deployment)
+    result = deployment_payload(deployment)
+    result["execution"] = {
+        "state": "adapter_not_provisioned",
+        "message": "A deployment plan was recorded. No infrastructure was provisioned or customer code executed.",
+        "restrictions": list(plan.restrictions),
+    }
+    return result
+
+
+@app.get("/api/v1/apps/{app_id}/deployments", dependencies=[Depends(require_token)])
+def list_application_deployments(
+    app_id: str, org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    app_item = db.scalar(select(Application).where(
+        Application.id == app_id, Application.org_id == org.id
+    ))
+    if not app_item:
+        raise HTTPException(404, "Application not found")
+    deployments = db.scalars(select(ApplicationDeployment).where(
+        ApplicationDeployment.app_id == app_id, ApplicationDeployment.org_id == org.id
+    ).order_by(ApplicationDeployment.created_at.desc())).all()
+    return [deployment_payload(item) for item in deployments]
+
+
+@app.get("/api/v1/apps/{app_id}/deployments/{deployment_id}", dependencies=[Depends(require_token)])
+def get_application_deployment(
+    app_id: str, deployment_id: str,
+    org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    deployment = db.scalar(select(ApplicationDeployment).where(
+        ApplicationDeployment.id == deployment_id,
+        ApplicationDeployment.app_id == app_id,
+        ApplicationDeployment.org_id == org.id,
+    ))
+    if not deployment:
+        raise HTTPException(404, "Application deployment not found")
+    return deployment_payload(deployment)
 
 
 def validate_workflow_definition(definition: dict):
