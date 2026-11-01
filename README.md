@@ -49,7 +49,7 @@ pytest -q
 
 ## API quick start
 
-The local demo accepts the development bearer token mosaic-local-demo. This is intentionally not secure authentication. Organisation-scoped endpoints use X-Organisation-ID as a demo workspace selector only.
+The hosted preview is protected by HTTP Basic Authentication. Set `MOSAIC_PREVIEW_USERNAME` (default `owner`) and `MOSAIC_PREVIEW_PASSWORD` before starting the server. The browser will prompt for these credentials. The preview is intended for one trusted operator only; it does not implement individual accounts or verified tenant membership. Organisation-scoped endpoints still use `X-Organisation-ID` as a workspace selector.
 
 ~~~bash
 curl -X POST http://localhost:8000/api/v1/organisations \
@@ -62,10 +62,10 @@ Use the returned organisation ID in the X-Organisation-ID header for object, app
 
 ## Security warning
 
-**Do not deploy this preview publicly or use it with real data.** The local preview has simplified demo authentication; organisation selection trusts a caller-supplied header and is not verified against an authenticated user's tenant membership. The application has no production-grade identity, authorisation, secrets management, rate limiting, tamper-proof audit, backup/restore or disaster-recovery controls. It has not undergone a security review or penetration test.
+**This remains a restricted developer preview, not a production or multi-customer platform.** A single shared Basic Auth credential protects the hosted preview, but it does not provide individual identities, role-based access or verified organisation membership. Organisation selection trusts a caller-supplied header. Do not use real personal, financial, customer or confidential company data. The application has no production-grade identity, authorisation, secrets management, rate limiting, tamper-proof audit, backup/restore or disaster-recovery controls. It has not undergone a security review or penetration test.
 
 Before shared deployment, implement and independently test:
-1. OIDC authentication and server-side user-to-organisation membership/authorisation.
+1. OIDC authentication, individual user identities, roles and server-side user-to-organisation membership/authorisation.
 2. PostgreSQL, schema migrations, row-level security and cross-tenant regression tests.
 3. Secret management, secure sessions, CSRF protections, rate limiting and security headers.
 4. Durable workflow execution, sandboxed extensions and explicit human approval gates.
