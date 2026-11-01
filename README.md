@@ -10,13 +10,14 @@ MOSAIC is an open-source project exploring a programmable operating environment 
 - Define organisation-scoped data objects using validated JSON Schema (Draft 2020-12).
 - Create, list, retrieve, update and delete records against those schemas.
 - Scope data-object and record queries by the selected organisation.
-- Create applications and manage draft-to-published metadata lifecycle.
+- Create applications, preview them in a declarative runtime, and manage draft-to-published lifecycle metadata.
+- Render dashboard, data-list and data-form pages against organisation-scoped data models; create, edit and delete validated business records from the application UI.
 - Execute bounded, organisation-scoped workflows with persisted run history, idempotency keys, log steps and human approval gates.
 - Record application-level audit events.
 - Use a responsive browser UI, REST API and OpenAPI docs.
 - Connect to SQLite for local preview or PostgreSQL using psycopg 3.
 
-Workflow runs execute synchronously inside the API process. The first runtime supports bounded `log` and `manual_approval` steps, persisted run state, approval/rejection, run history and idempotency. It is not yet a durable background-worker engine: process crashes, long-running tasks and external side effects require a later worker/Temporal integration. Publishing an application does not deploy a runnable application. Audit events are not tamper-evident.
+Workflow runs execute synchronously inside the API process. The first runtime supports bounded `log` and `manual_approval` steps, persisted run state, approval/rejection, run history and idempotency. It is not yet a durable background-worker engine: process crashes, long-running tasks and external side effects require a later worker/Temporal integration. The current runtime is a same-origin preview/hosted shell, not an independently provisioned deployment with a custom domain. Publishing changes lifecycle metadata; it does not create an isolated production deployment. Audit events are not tamper-evident.
 
 ## Run locally
 
