@@ -16,6 +16,7 @@ class Principal:
     subject: str
     email: str | None = None
     is_preview: bool = False
+    email_verified: bool = False
 
 
 @lru_cache(maxsize=1)
@@ -59,6 +60,7 @@ def verify_bearer_token(token: str) -> Principal:
         subject=subject,
         email=email if isinstance(email, str) else None,
         is_preview=False,
+        email_verified=claims.get("email_verified") is True,
     )
 
 
