@@ -16,11 +16,11 @@
 - Secrets management, structured logs, metrics and tracing
 
 ## v0.3 — Developer experience
-- mosaic CLI and Python/TypeScript SDKs
+- [x] Initial MOSAIC CLI and Python SDK
 - Local development environment and project templates
-- App manifest, metadata schema registry and versioning
+- [x] Versioned application manifest JSON Schema
 - Git-backed build/test/release pipeline
-- Environment promotion: development → staging → production
+- [x] Logical release snapshots for development, staging and production (not infrastructure promotion)
 
 ## v0.4 — Application runtime
 - Sandboxed extension runtime (WASM or isolated containers after threat review)
@@ -30,7 +30,9 @@
 - Workflow retries, idempotency, compensation and human task inbox
 
 ## v0.5 — Studios and marketplace
-- Visual page/form builder
+- [x] Visual page/form builder foundation and component registry
+- [x] Versioned application manifests and logical environment release snapshots
+- [x] Python SDK and CLI for validate/export/push/release
 - Developer workspace and API explorer
 - Signed app/connector packages and compatibility checks
 - Private organisation catalogues and public marketplace
@@ -45,3 +47,11 @@
 
 ## Release gates
 Every release requires automated tests, dependency and container scanning, migration tests, tenant-isolation tests, documentation, rollback procedure and a reviewed threat model for new execution surfaces.
+
+## Next engineering gates after the Studio foundation
+
+- Complete browser end-to-end tests for Studio editing, data bindings and workflow actions.
+- Add deployment adapters that provision isolated runtime instances from immutable releases.
+- Add environment-scoped configuration/secrets and signed artifacts before any customer-code execution.
+- Add rollback and release promotion with explicit approval and audit.
+- Harden production identity, PostgreSQL RLS, backups, observability and security testing before onboarding real tenants.

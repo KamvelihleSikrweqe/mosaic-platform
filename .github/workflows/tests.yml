@@ -14,9 +14,17 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
+      - name: Install MOSAIC developer package
+        run: pip install .
+      - name: Smoke-test MOSAIC CLI
+        run: mosaic --help
       - run: pytest -q
 
       - name: Check browser JavaScript syntax
         run: node --check static/app.js
+      - name: Check runtime and Studio JavaScript syntax
+        run: node --check static/app-runtime.js && node --check static/app-studio.js
+      - name: Compile Python SDK and CLI
+        run: python -m compileall -q mosaic mosaic_sdk mosaic_cli.py
       - name: Validate Keycloak realm JSON
         run: python -m json.tool keycloak/realm-mosaic.json > /dev/null

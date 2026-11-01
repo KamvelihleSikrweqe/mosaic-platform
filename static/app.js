@@ -136,7 +136,7 @@ async function refresh(){
   $('#workflowCount').textContent=workflows.length;
   $('#publishedCount').textContent=apps.filter(a=>a.status==='published').length;
   $('#objectList').innerHTML=objects.slice(0,5).map(o=>'<div class="item"><b>'+esc(o.label)+'</b><span class="tag">'+esc(o.key)+'</span></div>').join('')||'<small class="muted">No data models yet.</small>';
-  $('#appList').innerHTML=apps.slice(0,5).map(a=>'<div class="item"><span><b>'+esc(a.name)+'</b><small class="tag"> '+esc(a.status)+' · v'+esc(a.version)+'</small></span><span class="workflow-actions"><button type="button" class="mini-action" data-preview="'+esc(a.id)+'">Open</button>'+(a.status==='published'?'':'<button type="button" class="mini-action" data-publish="'+esc(a.id)+'">Publish</button>')+'</span></div>').join('')||'<small class="muted">No applications yet.</small>';
+  $('#appList').innerHTML=apps.slice(0,5).map(a=>'<div class="item"><span><b>'+esc(a.name)+'</b><small class="tag"> '+esc(a.status)+' · v'+esc(a.version)+'</small></span><span class="workflow-actions"><button type="button" class="mini-action" data-studio="'+esc(a.id)+'">Design</button><button type="button" class="mini-action" data-preview="'+esc(a.id)+'">Open</button>'+(a.status==='published'?'':'<button type="button" class="mini-action" data-publish="'+esc(a.id)+'">Publish</button>')+'</span></div>').join('')||'<small class="muted">No applications yet.</small>';
   $('#workflowList').innerHTML=workflows.slice(0,5).map(w=>'<div class="item workflow-item"><span><b>'+esc(w.name)+'</b><small class="tag"> '+(w.enabled?'ENABLED':'DRAFT')+' · '+(w.definition?.steps?.length||0)+' steps</small></span><span class="workflow-actions">'+(w.enabled?'<button type="button" class="mini-action" data-run="'+esc(w.id)+'">Run</button>':'<button type="button" class="mini-action" data-enable="'+esc(w.id)+'">Enable</button>')+'<button type="button" class="mini-action" data-history="'+esc(w.id)+'">Runs</button></span></div>').join('')||'<small class="muted">No workflows yet.</small>';
   const groups=await Promise.all(objects.map(async object=>({object,records:await api('/objects/'+encodeURIComponent(object.id)+'/records')})));
   const rows=groups.flatMap(({object,records})=>records.map(record=>({object,record})));
@@ -240,10 +240,11 @@ $('#loadDemo').addEventListener('click',async()=>{
   finally{button.disabled=false;button.textContent='Load supplier demo';}
 });
 document.addEventListener('click',async event=>{
-  const publish=event.target.closest('[data-publish]'),preview=event.target.closest('[data-preview]'),enable=event.target.closest('[data-enable]'),run=event.target.closest('[data-run]'),history=event.target.closest('[data-history]'),approval=event.target.closest('[data-approval]');
-  if(!publish&&!preview&&!enable&&!run&&!history&&!approval)return;
-  const button=publish||preview||enable||run||history||approval;if(button)button.disabled=true;
+  const publish=event.target.closest('[data-publish]'),preview=event.target.closest('[data-preview]'),studio=event.target.closest('[data-studio]'),enable=event.target.closest('[data-enable]'),run=event.target.closest('[data-run]'),history=event.target.closest('[data-history]'),approval=event.target.closest('[data-approval]');
+  if(!publish&&!preview&&!studio&&!enable&&!run&&!history&&!approval)return;
+  const button=publish||preview||studio||enable||run||history||approval;if(button)button.disabled=true;
   try{
+    if(studio){if(!state.org)throw new Error('Select an organisation first.');window.location.assign('/apps/'+encodeURIComponent(studio.dataset.studio)+'/studio?org_id='+encodeURIComponent(state.org));return;}
     if(preview){if(!state.org)throw new Error('Select an organisation first.');window.location.assign('/apps/'+encodeURIComponent(preview.dataset.preview)+'/preview?org_id='+encodeURIComponent(state.org));return;}
     if(publish){await api('/apps/'+encodeURIComponent(publish.dataset.publish)+'/publish',{method:'POST'});toast('Application metadata published.');}
     if(enable){await api('/workflows/'+encodeURIComponent(enable.dataset.enable)+'/enable',{method:'POST'});toast('Workflow enabled and ready to run.');}
