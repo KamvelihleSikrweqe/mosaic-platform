@@ -1,11 +1,13 @@
 services:
   mosaic:
     build: .
-    # Bind to loopback only: this is a local demo, not a shared deployment.
-    ports: ["127.0.0.1:8000:8000"]
+    ports:
+      - "127.0.0.1:8000:10000"
     environment:
+      PORT: "10000"
       DATABASE_URL: sqlite:////data/mosaic.db
-      MOSAIC_ALLOW_INSECURE_DEMO: "true"
+      MOSAIC_PREVIEW_USERNAME: owner
+      MOSAIC_PREVIEW_PASSWORD: ${MOSAIC_PREVIEW_PASSWORD:?Set MOSAIC_PREVIEW_PASSWORD in your environment}
     volumes:
       - mosaic-data:/data
     restart: unless-stopped

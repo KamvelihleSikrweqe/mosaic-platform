@@ -2,32 +2,36 @@
 
 MOSAIC is an open-source project exploring a programmable operating environment for organisations. Each organisation can configure its own applications, data models, workflows, integrations and AI capabilities while retaining control of deployment and data.
 
-> **Status: v0.1.0 early developer preview. Runnable, but not production-ready.** Do not expose it to the public internet or use real customer, personal, financial or confidential company data.
+> **Status: v0.2.0 controlled developer preview. Not production-ready.** Do not use real customer, personal, financial or confidential company data.
 
-## What works in this preview
+## What works
 
 - Create and select organisation workspaces.
-- Define organisation-scoped metadata/data objects with JSON Schema.
-- Create applications with JSON configuration and publish a new version.
+- Define organisation-scoped data objects using validated JSON Schema (Draft 2020-12).
+- Create, list, retrieve, update and delete records against those schemas.
+- Scope data-object and record queries by the selected organisation.
+- Create applications and manage draft-to-published metadata lifecycle.
 - Store declarative workflow definitions using a restricted step vocabulary.
 - Record application-level audit events.
-- Use a responsive browser UI, REST API and interactive OpenAPI docs.
+- Use a responsive browser UI, REST API and OpenAPI docs.
+- Connect to SQLite for local preview or PostgreSQL using psycopg 3.
 
-Workflow definitions are stored; they are not executed by a durable workflow engine. The audit log is not tamper-proof evidence.
+Workflow definitions are still declarative; they are not executed by a durable workflow engine. Publishing an application does not deploy a runnable application. Audit events are not tamper-evident.
 
 ## Run locally
 
-Requires Python 3.11+ or Docker.
+Requires Docker Compose or Python 3.11+.
 
 ### Docker Compose
 
-The Compose configuration binds to loopback only (127.0.0.1) so the demo is not exposed to other machines on your network.
+Set a local preview password before starting. Compose binds to loopback only.
 
 ~~~bash
+export MOSAIC_PREVIEW_PASSWORD='replace-with-a-long-random-local-secret'
 docker compose up --build
 ~~~
 
-Open http://localhost:8000 and API docs at http://localhost:8000/docs.
+Open http://localhost:8000 and API docs at http://localhost:8000/docs. The browser uses HTTP Basic Authentication.
 
 ### Python
 
@@ -35,10 +39,9 @@ Open http://localhost:8000 and API docs at http://localhost:8000/docs.
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export MOSAIC_PREVIEW_PASSWORD='replace-with-a-long-random-local-secret'
 uvicorn mosaic.main:app --reload
 ~~~
-
-Open http://localhost:8000.
 
 ### Tests
 
@@ -49,34 +52,32 @@ pytest -q
 
 ## API quick start
 
-The hosted preview is protected by HTTP Basic Authentication. Set `MOSAIC_PREVIEW_USERNAME` (default `owner`) and `MOSAIC_PREVIEW_PASSWORD` before starting the server. The browser will prompt for these credentials. The preview is intended for one trusted operator only; it does not implement individual accounts or verified tenant membership. Organisation-scoped endpoints still use `X-Organisation-ID` as a workspace selector.
-
 ~~~bash
+export MOSAIC_PREVIEW_PASSWORD='replace-with-a-long-random-local-secret'
+AUTH=$(printf 'owner:%s' "$MOSAIC_PREVIEW_PASSWORD" | base64)
 curl -X POST http://localhost:8000/api/v1/organisations \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer mosaic-local-demo' \
+  -H "Authorization: Basic $AUTH" -H 'Content-Type: application/json' \
   -d '{"name":"Example Company","slug":"example-company"}'
 ~~~
 
-Use the returned organisation ID in the X-Organisation-ID header for object, application, workflow and audit endpoints.
+Use the returned organisation ID as the `X-Organisation-ID` header. Create a data object, then create records at `POST /api/v1/objects/{object_id}/records` with a JSON body such as `{"data":{"name":"Example Supplier"}}`.
 
-## Security warning
+## Health endpoints
 
-**This remains a restricted developer preview, not a production or multi-customer platform.** A single shared Basic Auth credential protects the hosted preview, but it does not provide individual identities, role-based access or verified organisation membership. Organisation selection trusts a caller-supplied header. Do not use real personal, financial, customer or confidential company data. The application has no production-grade identity, authorisation, secrets management, rate limiting, tamper-proof audit, backup/restore or disaster-recovery controls. It has not undergone a security review or penetration test.
+- `/health/live`: process liveness.
+- `/health/ready`: database connectivity readiness.
 
-Before shared deployment, implement and independently test:
-1. OIDC authentication, individual user identities, roles and server-side user-to-organisation membership/authorisation.
-2. PostgreSQL, schema migrations, row-level security and cross-tenant regression tests.
-3. Secret management, secure sessions, CSRF protections, rate limiting and security headers.
-4. Durable workflow execution, sandboxed extensions and explicit human approval gates.
-5. Audit integrity, backups, restore drills, observability and incident response.
-6. Threat modelling, penetration testing and a POPIA/privacy review.
+## Security and production status
+
+**This remains a restricted developer preview, not a production or multi-customer platform.** A single shared Basic Auth credential protects the preview, but it does not provide individual identities, role-based access or verified organisation membership. Organisation selection trusts a caller-supplied header. Do not use real personal, financial, customer or confidential company data. The application still needs OIDC, server-side membership and policy enforcement, database migrations, PostgreSQL row-level security, rate limiting, secure headers, CSRF protections where applicable, secrets management, tamper-evident audit, backups/restore drills, observability, incident response, threat modelling and independent penetration testing.
+
+The current SQLAlchemy `create_all` bootstrap creates missing tables but does not migrate existing schemas. A versioned migration system is required before production rollout. Do not treat a successful deployment as a production-readiness certification.
 
 ## Architecture direction
 
-The longer-term platform includes an organisation control plane, tenant runtime, developer platform, application/developer/infrastructure/AI studios and a governed marketplace. The current implementation is a small modular monolith; planned capabilities are not represented as completed features.
+The longer-term platform includes an organisation control plane, tenant runtime, developer platform, application/developer/infrastructure/AI studios and a governed marketplace. The current implementation is a modular-monolith preview; planned capabilities are not represented as completed features.
 
-See the architecture, product vision, roadmap and security policy in the docs and root directory.
+See `docs/ARCHITECTURE.md`, the product vision, roadmap and `SECURITY.md`.
 
 ## Licence
 
