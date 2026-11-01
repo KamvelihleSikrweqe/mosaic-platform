@@ -31,7 +31,10 @@ def validate_manifest(manifest):
         for c_index, component in enumerate(components):
             if not isinstance(component, dict) or component.get("type") not in COMPONENTS:
                 errors.append(f"pages[{p_index - 1}].components[{c_index}] has an unsupported type")
-            elif component.get("action") and component["action"].get("type") != "workflow.run":
+            elif component.get("action") and (
+                not isinstance(component["action"], dict)
+                or component["action"].get("type") != "workflow.run"
+            ):
                 errors.append(f"pages[{p_index - 1}].components[{c_index}] uses an unsupported action")
     return errors
 
