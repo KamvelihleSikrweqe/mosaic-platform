@@ -7,6 +7,7 @@ COPY mosaic ./mosaic
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
 COPY static ./static
+COPY schemas ./schemas
 RUN useradd --create-home appuser && mkdir -p /data && chown -R appuser:appuser /app /data
 USER appuser
 EXPOSE 10000
