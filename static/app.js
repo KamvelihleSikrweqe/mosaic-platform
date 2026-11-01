@@ -63,7 +63,8 @@ async function handleOidcCallback(){
   sessionStorage.removeItem('mosaic.oidc.transaction');
   if(!transaction||!returnedState||returnedState!==transaction.state)throw new Error('Login state validation failed. Start sign-in again.');
   const tokens=await tokenRequest({grant_type:'authorization_code',code,redirect_uri:state.auth.redirect_uri,code_verifier:transaction.verifier});
-  if(!tokens.id_token)throw new Error('Identity provider did not return an identity token.');\n  await validateIdToken(tokens.id_token,transaction.nonce);
+  if(!tokens.id_token)throw new Error('Identity provider did not return an identity token.');
+  await validateIdToken(tokens.id_token,transaction.nonce);
   setSession(tokens);
   return true;
 }
