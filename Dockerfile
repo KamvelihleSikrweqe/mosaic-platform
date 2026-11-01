@@ -5,7 +5,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY mosaic ./mosaic
 COPY static ./static
-RUN useradd --create-home appuser && chown -R appuser:appuser /app
+RUN useradd --create-home appuser && mkdir -p /data && chown -R appuser:appuser /app /data
 USER appuser
 EXPOSE 8000
 CMD ["uvicorn", "mosaic.main:app", "--host", "0.0.0.0", "--port", "8000"]
