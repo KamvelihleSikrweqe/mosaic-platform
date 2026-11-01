@@ -1,10 +1,10 @@
 const $=s=>document.querySelector(s);
 const state={org:null,orgs:[],auth:null,accessToken:null,refreshToken:null,idToken:null,expiresAt:0,authMode:false};
 const tokenStore='mosaic.oidc.session';
-function b64url(bytes){return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');}
+function b64url(bytes){return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
 function randomText(size=32){const bytes=crypto.getRandomValues(new Uint8Array(size));return b64url(bytes);}
 async function pkceChallenge(verifier){return b64url(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier)));}
-function decodeJwt(token){const part=token.split('.')[1];return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(part.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))));}
+function decodeJwt(token){const part=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');const padded=part+'='.repeat((4-part.length%4)%4);return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(padded),c=>c.charCodeAt(0))));}
 function saveSession(){sessionStorage.setItem(tokenStore,JSON.stringify({accessToken:state.accessToken,refreshToken:state.refreshToken,idToken:state.idToken,expiresAt:state.expiresAt}));}
 function clearSession(){state.accessToken=null;state.refreshToken=null;state.idToken=null;state.expiresAt=0;sessionStorage.removeItem(tokenStore);}
 function setSession(tokens){
@@ -62,7 +62,7 @@ function renderAuth(){
   const signedIn=Boolean(state.accessToken);
   action.textContent=signedIn?'Sign out':'Sign in';
   status.textContent=signedIn?'Signed in':'Authentication required';
-  $('#loadDemo').hidden=true;
+  $('#loadDemo').hidden=true;const demoLink=document.querySelector('nav a[href="/demo/suppliers"]');if(demoLink)demoLink.hidden=true;
   action.onclick=()=>signedIn?endLogin():startLogin().catch(e=>toast(e.message));
 }
 async function initAuth(){
@@ -74,7 +74,7 @@ async function initAuth(){
   const stored=JSON.parse(sessionStorage.getItem(tokenStore)||'null');
   if(stored){state.accessToken=stored.accessToken;state.refreshToken=stored.refreshToken;state.idToken=stored.idToken;state.expiresAt=stored.expiresAt||0;}
   const callback=await handleOidcCallback();
-  if(!callback&&state.accessToken&&Date.now()>=state.expiresAt-30000&&state.refreshToken)await refreshSession();
+  if(!callback&&state.accessToken&&Date.now()>=state.expiresAt-30000){if(state.refreshToken)await refreshSession();else clearSession();}
   renderAuth();
   if(!state.accessToken){document.querySelector('main').classList.add('auth-locked');return false;}
   document.querySelector('main').classList.remove('auth-locked');
@@ -84,7 +84,8 @@ async function initAuth(){
 async function api(path,opts={}){
   const headers={'Content-Type':'application/json',...(opts.headers||{})};
   if(state.authMode){await ensureAccessToken();headers.Authorization='Bearer '+state.accessToken;}\n  if(state.org) headers['X-Organisation-ID']=state.org;
-  let response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});\n  if(response.status===401&&state.authMode&&state.refreshToken){await refreshSession();headers.Authorization='Bearer '+state.accessToken;response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});}
+  let response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});
+  if(response.status===401&&state.authMode&&state.refreshToken){await refreshSession();headers.Authorization='Bearer '+state.accessToken;response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});}
   const data=response.status===204?null:await response.json().catch(()=>({detail:response.statusText}));
   if(!response.ok) throw new Error(data?.detail||'Request failed ('+response.status+')');
   return data;
