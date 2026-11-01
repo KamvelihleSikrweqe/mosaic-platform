@@ -128,6 +128,7 @@ async function loadOrgs(){
 }
 async function refresh(){
   if(!state.org){clearWorkspace();return;}
+  $('#workflowRuns').replaceChildren();
   const [objects,apps,workflows,audit]=await Promise.all([
     api('/objects'),api('/apps'),api('/workflows'),api('/audit')
   ]);
@@ -148,7 +149,7 @@ async function refresh(){
   $('#auditList').innerHTML=audit.length?audit.slice(0,10).map(event=>'<div class="audit-row"><span><b>'+esc(event.action)+'</b> · '+esc(event.resource_type)+'</span><time>'+new Date(event.created_at).toLocaleString()+'</time></div>').join(''):'No activity yet.';
 }
 async function showWorkflowRuns(workflowId){
-  const panel=$('#workflowRuns');panel.innerHTML='<div class="item"><small class="muted">Loading workflow runs…</small></div>';
+  const panel=$('#workflowRuns');panel.dataset.workflowId=workflowId;panel.innerHTML='<div class="item"><small class="muted">Loading workflow runs…</small></div>';
   try{
     const runs=await api('/workflows/'+encodeURIComponent(workflowId)+'/runs');
     if(!runs.length){panel.innerHTML='<div class="item"><small class="muted">No runs yet for this workflow.</small></div>';return;}
@@ -170,10 +171,11 @@ async function startWorkflowRun(workflowId){
   await showWorkflowRuns(workflowId);
 }
 async function decideApproval(runId,approved){
-  const comment=window.prompt(approved?'Approval comment (optional)':'Reason for rejection (optional)','')||'';
-  await api('/workflow-runs/'+encodeURIComponent(runId)+'/approval',{method:'POST',body:JSON.stringify({approved,comment})});
+  const comment=window.prompt(approved?'Approval comment (optional)':'Reason for rejection (optional)','');
+  if(comment===null)return;
+  const result=await api('/workflow-runs/'+encodeURIComponent(runId)+'/approval',{method:'POST',body:JSON.stringify({approved,comment})});
   toast(approved?'Approval recorded; workflow resumed.':'Approval rejected; workflow stopped.');
-  await refresh();
+  return result.workflow_id;
 }
 function field(label,name,placeholder='',value=''){return '<label>'+label+'<input name="'+name+'" placeholder="'+esc(placeholder)+'" value="'+esc(value)+'" required></label>';}
 function openModal(kind){
@@ -246,8 +248,8 @@ document.addEventListener('click',async event=>{
     if(enable){await api('/workflows/'+encodeURIComponent(enable.dataset.enable)+'/enable',{method:'POST'});toast('Workflow enabled and ready to run.');}
     if(run)await startWorkflowRun(run.dataset.run);
     if(history)await showWorkflowRuns(history.dataset.history);
-    if(approval){const runId=approval.dataset.runId;await decideApproval(runId,approval.dataset.approval==='approve');}
-    if(publish||enable||approval)await refresh();
+    if(approval){const runId=approval.dataset.runId;const workflowId=await decideApproval(runId,approval.dataset.approval==='approve');if(workflowId){await refresh();await showWorkflowRuns(workflowId);}}
+    if(publish||enable)await refresh();
   }catch(error){toast(error.message);}
   finally{if(button)button.disabled=false;}
 });
