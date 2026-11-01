@@ -5,3 +5,4 @@ pydantic>=2.9,<3
 psycopg[binary]>=3.2,<4
 jsonschema>=4.23,<5
 alembic>=1.14,<2
+PyJWT[crypto]>=2.10,<3
