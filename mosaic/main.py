@@ -843,19 +843,23 @@ def advance_workflow_run(db: Session, org_id: str, workflow: Workflow, run: Work
         index = run.current_step
         step = steps[index]
         if step["type"] == "log":
-            run.step_results.append({
+            results = list(run.step_results or [])
+            results.append({
                 "step": index, "type": "log", "status": "completed",
                 "message": step.get("message", ""), "completed_at": datetime.now(timezone.utc).isoformat(),
             })
+            run.step_results = results
             run.current_step += 1
             continue
         if step["type"] == "manual_approval":
             run.status = "waiting_approval"
-            run.step_results.append({
+            results = list(run.step_results or [])
+            results.append({
                 "step": index, "type": "manual_approval", "status": "waiting",
                 "label": step.get("label", "Approval required"),
                 "requested_at": datetime.now(timezone.utc).isoformat(),
             })
+            run.step_results = results
             audit(db, org_id, "workflow_run.waiting_approval", "workflow_run", run.id, {"step": index})
             return
         run.status = "failed"
@@ -999,9 +1003,13 @@ def decide_workflow_approval(
                     if item.get("type") == "manual_approval" and item.get("status") == "waiting"), None)
     if not pending:
         raise HTTPException(409, "No pending approval step exists")
+    results = [dict(item) for item in (run.step_results or [])]
+    pending = next(item for item in reversed(results)
+                   if item.get("type") == "manual_approval" and item.get("status") == "waiting")
     pending["status"] = "approved" if payload.approved else "rejected"
     pending["comment"] = payload.comment
     pending["decided_at"] = datetime.now(timezone.utc).isoformat()
+    run.step_results = results
     if payload.approved:
         run.current_step += 1
         run.status = "running"
