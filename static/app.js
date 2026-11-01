@@ -136,7 +136,7 @@ async function refresh(){
   $('#workflowCount').textContent=workflows.length;
   $('#publishedCount').textContent=apps.filter(a=>a.status==='published').length;
   $('#objectList').innerHTML=objects.slice(0,5).map(o=>'<div class="item"><b>'+esc(o.label)+'</b><span class="tag">'+esc(o.key)+'</span></div>').join('')||'<small class="muted">No data models yet.</small>';
-  $('#appList').innerHTML=apps.slice(0,5).map(a=>'<div class="item"><span><b>'+esc(a.name)+'</b><small class="tag"> '+esc(a.status)+' · v'+esc(a.version)+'</small></span>'+(a.status==='published'?'':'<button type="button" class="mini-action" data-publish="'+esc(a.id)+'">Publish metadata</button>')+'</div>').join('')||'<small class="muted">No applications yet.</small>';
+  $('#appList').innerHTML=apps.slice(0,5).map(a=>'<div class="item"><span><b>'+esc(a.name)+'</b><small class="tag"> '+esc(a.status)+' · v'+esc(a.version)+'</small></span><span class="workflow-actions"><button type="button" class="mini-action" data-preview="'+esc(a.id)+'">Open</button>'+(a.status==='published'?'':'<button type="button" class="mini-action" data-publish="'+esc(a.id)+'">Publish</button>')+'</span></div>').join('')||'<small class="muted">No applications yet.</small>';
   $('#workflowList').innerHTML=workflows.slice(0,5).map(w=>'<div class="item workflow-item"><span><b>'+esc(w.name)+'</b><small class="tag"> '+(w.enabled?'ENABLED':'DRAFT')+' · '+(w.definition?.steps?.length||0)+' steps</small></span><span class="workflow-actions">'+(w.enabled?'<button type="button" class="mini-action" data-run="'+esc(w.id)+'">Run</button>':'<button type="button" class="mini-action" data-enable="'+esc(w.id)+'">Enable</button>')+'<button type="button" class="mini-action" data-history="'+esc(w.id)+'">Runs</button></span></div>').join('')||'<small class="muted">No workflows yet.</small>';
   const groups=await Promise.all(objects.map(async object=>({object,records:await api('/objects/'+encodeURIComponent(object.id)+'/records')})));
   const rows=groups.flatMap(({object,records})=>records.map(record=>({object,record})));
@@ -183,7 +183,7 @@ function openModal(kind){
   const configs={
     org:{title:'Create organisation',fields:field('Organisation name','name','e.g. Acme Financial')+field('Unique workspace slug','slug','acme-financial'),save:'Create organisation'},
     object:{title:'Create data model',fields:field('Display name','label','Supplier')+field('Object key','key','supplier')+'<label>JSON Schema <span class="hint">Define fields for this business object.</span><textarea name="schema" required>{"type":"object","properties":{"name":{"type":"string"},"email":{"type":"string","format":"email"}}}</textarea></label>',save:'Create data model'},
-    app:{title:'Create application',fields:field('Application name','name','Supplier Portal')+'<label>Description<textarea name="description" placeholder="What will this application do?"></textarea></label><label>Application configuration <span class="hint">JSON metadata; this preview does not render or deploy an app.</span><textarea name="config" required>{"navigation":[],"pages":[]}</textarea></label>',save:'Create application'},
+    app:{title:'Create application',fields:field('Application name','name','Supplier Portal')+'<label>Description<textarea name="description" placeholder="What will this application do?"></textarea></label><label>Application configuration <span class="hint">The runtime supports dashboard, data-list and data-form pages. Link dataSource to an existing data model key.</span><textarea name="config" required>{"navigation":["Dashboard","Suppliers","Register Supplier"],"pages":[{"name":"Dashboard","type":"dashboard"},{"name":"Suppliers","type":"data-list","dataSource":"supplier"},{"name":"Register Supplier","type":"data-form","dataSource":"supplier"}]}</textarea></label>',save:'Create application'},
     workflow:{title:'Create workflow',fields:field('Workflow name','name','Supplier approval')+'<label>Workflow definition <span class="hint">Supported steps: log and manual_approval. Runs pause for a human decision and continue after approval.</span><textarea name="definition" required>{"steps":[{"type":"manual_approval","label":"Review request"},{"type":"log","message":"Approved"}]}</textarea></label>',save:'Create workflow'}
   };
   const config=configs[kind];$('#modalTitle').textContent=config.title;$('#fields').innerHTML=config.fields;
@@ -240,10 +240,11 @@ $('#loadDemo').addEventListener('click',async()=>{
   finally{button.disabled=false;button.textContent='Load supplier demo';}
 });
 document.addEventListener('click',async event=>{
-  const publish=event.target.closest('[data-publish]'),enable=event.target.closest('[data-enable]'),run=event.target.closest('[data-run]'),history=event.target.closest('[data-history]'),approval=event.target.closest('[data-approval]');
-  if(!publish&&!enable&&!run&&!history&&!approval)return;
-  const button=publish||enable||run||history||approval;if(button)button.disabled=true;
+  const publish=event.target.closest('[data-publish]'),preview=event.target.closest('[data-preview]'),enable=event.target.closest('[data-enable]'),run=event.target.closest('[data-run]'),history=event.target.closest('[data-history]'),approval=event.target.closest('[data-approval]');
+  if(!publish&&!preview&&!enable&&!run&&!history&&!approval)return;
+  const button=publish||preview||enable||run||history||approval;if(button)button.disabled=true;
   try{
+    if(preview){if(!state.org)throw new Error('Select an organisation first.');window.location.assign('/apps/'+encodeURIComponent(preview.dataset.preview)+'/preview?org_id='+encodeURIComponent(state.org));return;}
     if(publish){await api('/apps/'+encodeURIComponent(publish.dataset.publish)+'/publish',{method:'POST'});toast('Application metadata published.');}
     if(enable){await api('/workflows/'+encodeURIComponent(enable.dataset.enable)+'/enable',{method:'POST'});toast('Workflow enabled and ready to run.');}
     if(run)await startWorkflowRun(run.dataset.run);
