@@ -1,7 +1,10 @@
 import base64
 import binascii
 import hmac
+import hashlib
 import os
+import secrets
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .auth import Principal, get_current_principal, oidc_enabled
-from .models import Application, AuditEvent, DataObject, DataRecord, Organisation, OrganisationMembership, Workflow
+from .models import Application, AuditEvent, DataObject, DataRecord, Organisation, OrganisationMembership, OrganisationInvitation, Workflow
 
 app = FastAPI(
     title="MOSAIC Platform",
@@ -77,6 +80,20 @@ async def preview_basic_auth(request, call_next):
 class OrgIn(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     slug: str = Field(min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
+
+
+class InvitationIn(BaseModel):
+    email: str = Field(min_length=5, max_length=320)
+    role: str = Field(default="member", pattern=r"^(member|operator|builder|admin)$")
+    expires_in_days: int = Field(default=7, ge=1, le=30)
+
+
+class RoleIn(BaseModel):
+    role: str = Field(pattern=r"^(member|operator|builder|admin)$")
+
+
+class InvitationAcceptIn(BaseModel):
+    token: str = Field(min_length=40, max_length=200)
 
 
 class ObjectIn(BaseModel):
@@ -396,6 +413,179 @@ def current_user(
             for item in memberships
         ],
     }
+
+
+
+def require_org_admin(org: Organisation, principal: Principal, db: Session) -> OrganisationMembership:
+    if principal.is_preview:
+        raise HTTPException(403, "Organisation invitations require verified OIDC identity")
+    membership = db.scalar(select(OrganisationMembership).where(
+        OrganisationMembership.org_id == org.id, OrganisationMembership.user_id == principal.user_id
+    ))
+    if not membership or membership.role not in {"owner", "admin"}:
+        raise HTTPException(403, "Only organisation owners and admins can manage membership")
+    return membership
+
+
+def normalise_email(value: str) -> str:
+    return value.strip().casefold()
+
+
+@app.post("/api/v1/organisations/{org_id}/invitations", status_code=201)
+def create_invitation(org_id: str, payload: InvitationIn,
+    principal: Principal = Depends(get_current_principal), db: Session = Depends(get_db)):
+    set_user_context(db, principal.user_id)
+    set_tenant_context(db, org_id)
+    org = db.get(Organisation, org_id)
+    if not org:
+        raise HTTPException(404, "Organisation not found")
+    actor = require_org_admin(org, principal, db)
+    if not principal.email_verified or not principal.email:
+        raise HTTPException(403, "A verified email address is required to manage invitations")
+    email = normalise_email(payload.email)
+    if actor.role != "owner" and payload.role == "admin":
+        raise HTTPException(403, "Only an owner can invite an organisation admin")
+    existing = db.scalar(select(OrganisationMembership).where(
+        OrganisationMembership.org_id == org_id, OrganisationMembership.email == email))
+    if existing:
+        raise HTTPException(409, "This email already belongs to the organisation")
+    pending = db.scalar(select(OrganisationInvitation).where(
+        OrganisationInvitation.org_id == org_id, OrganisationInvitation.email == email,
+        OrganisationInvitation.accepted_at.is_(None), OrganisationInvitation.revoked_at.is_(None)))
+    if pending and pending.expires_at.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc):
+        raise HTTPException(409, "An active invitation already exists for this email")
+    token = f"{org_id}.{secrets.token_urlsafe(36)}"
+    invitation = OrganisationInvitation(
+        id=str(uuid4()), org_id=org_id, email=email,
+        token_hash=hashlib.sha256(token.encode()).hexdigest(), role=payload.role,
+        invited_by=principal.user_id,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=payload.expires_in_days))
+    db.add(invitation)
+    audit(db, org_id, "membership.invitation_created", "organisation_invitation",
+          invitation.id, {"email": email, "role": payload.role})
+    db.commit()
+    return {"id": invitation.id, "email": email, "role": payload.role,
+            "expires_at": invitation.expires_at, "acceptance_token": token,
+            "delivery": "manual", "message": "Deliver this token through a trusted channel. It is shown only once."}
+
+
+@app.get("/api/v1/organisations/{org_id}/members")
+def list_members(org_id: str, principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db)):
+    set_user_context(db, principal.user_id)
+    set_tenant_context(db, org_id)
+    org = db.get(Organisation, org_id)
+    if not org:
+        raise HTTPException(404, "Organisation not found")
+    require_org_admin(org, principal, db)
+    members = db.scalars(select(OrganisationMembership).where(
+        OrganisationMembership.org_id == org_id).order_by(OrganisationMembership.created_at.asc())).all()
+    return [{"user_id": x.user_id, "email": x.email, "role": x.role, "created_at": x.created_at}
+            for x in members]
+
+
+@app.patch("/api/v1/organisations/{org_id}/members/{user_id}")
+def update_member_role(org_id: str, user_id: str, payload: RoleIn,
+    principal: Principal = Depends(get_current_principal), db: Session = Depends(get_db)):
+    set_user_context(db, principal.user_id)
+    set_tenant_context(db, org_id)
+    org = db.get(Organisation, org_id)
+    if not org:
+        raise HTTPException(404, "Organisation not found")
+    actor = require_org_admin(org, principal, db)
+    target = db.scalar(select(OrganisationMembership).where(
+        OrganisationMembership.org_id == org_id, OrganisationMembership.user_id == user_id))
+    if not target:
+        raise HTTPException(404, "Member not found")
+    if target.role == "owner":
+        raise HTTPException(409, "The organisation owner role cannot be changed here")
+    if actor.role != "owner" and (target.role == "admin" or payload.role == "admin"):
+        raise HTTPException(403, "Only an owner can change administrator roles")
+    target.role = payload.role
+    audit(db, org_id, "membership.role_updated", "organisation_membership", target.id, {"role": payload.role})
+    db.commit()
+    return {"user_id": target.user_id, "role": target.role}
+
+
+@app.delete("/api/v1/organisations/{org_id}/members/{user_id}", status_code=204)
+def remove_member(org_id: str, user_id: str, principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db)):
+    set_user_context(db, principal.user_id)
+    set_tenant_context(db, org_id)
+    org = db.get(Organisation, org_id)
+    if not org:
+        raise HTTPException(404, "Organisation not found")
+    actor = require_org_admin(org, principal, db)
+    target = db.scalar(select(OrganisationMembership).where(
+        OrganisationMembership.org_id == org_id, OrganisationMembership.user_id == user_id))
+    if not target:
+        raise HTTPException(404, "Member not found")
+    if target.role == "owner":
+        raise HTTPException(409, "The organisation owner cannot be removed")
+    if actor.role != "owner" and target.role == "admin":
+        raise HTTPException(403, "Only an owner can remove an administrator")
+    audit(db, org_id, "membership.revoked", "organisation_membership", target.id,
+          {"user_id": target.user_id, "role": target.role})
+    db.delete(target)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/api/v1/invitations/accept")
+def accept_invitation(payload: InvitationAcceptIn, principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db)):
+    if principal.is_preview or not principal.email_verified or not principal.email:
+        raise HTTPException(403, "Accepting an invitation requires a verified OIDC email")
+    org_id, separator, secret = payload.token.partition(".")
+    if not separator or not secret or len(org_id) != 36:
+        raise HTTPException(400, "Invalid invitation token")
+    set_user_context(db, principal.user_id)
+    set_tenant_context(db, org_id)
+    invitation = db.scalar(select(OrganisationInvitation).where(
+        OrganisationInvitation.org_id == org_id,
+        OrganisationInvitation.token_hash == hashlib.sha256(payload.token.encode()).hexdigest()))
+    if not invitation:
+        raise HTTPException(404, "Invitation not found")
+    now = datetime.now(timezone.utc)
+    expiry = invitation.expires_at.replace(tzinfo=timezone.utc)
+    if invitation.accepted_at or invitation.revoked_at or expiry <= now:
+        raise HTTPException(410, "Invitation is no longer valid")
+    if normalise_email(principal.email) != invitation.email:
+        raise HTTPException(403, "This invitation was issued to a different email address")
+    if db.scalar(select(OrganisationMembership).where(
+        OrganisationMembership.org_id == org_id, OrganisationMembership.user_id == principal.user_id)):
+        raise HTTPException(409, "You are already a member of this organisation")
+    invitation.accepted_at = now
+    membership = OrganisationMembership(
+        id=str(uuid4()), org_id=org_id, user_id=principal.user_id,
+        issuer=principal.issuer, subject=principal.subject,
+        email=normalise_email(principal.email), role=invitation.role)
+    db.add(membership)
+    audit(db, org_id, "membership.invitation_accepted", "organisation_membership",
+          membership.id, {"role": invitation.role})
+    db.commit()
+    return {"organisation_id": org_id, "role": membership.role, "message": "Invitation accepted"}
+
+
+@app.delete("/api/v1/organisations/{org_id}/invitations/{invitation_id}", status_code=204)
+def revoke_invitation(org_id: str, invitation_id: str,
+    principal: Principal = Depends(get_current_principal), db: Session = Depends(get_db)):
+    set_user_context(db, principal.user_id)
+    set_tenant_context(db, org_id)
+    org = db.get(Organisation, org_id)
+    if not org:
+        raise HTTPException(404, "Organisation not found")
+    require_org_admin(org, principal, db)
+    invitation = db.scalar(select(OrganisationInvitation).where(
+        OrganisationInvitation.org_id == org_id, OrganisationInvitation.id == invitation_id))
+    if not invitation:
+        raise HTTPException(404, "Invitation not found")
+    if invitation.accepted_at:
+        raise HTTPException(409, "An accepted invitation cannot be revoked")
+    invitation.revoked_at = datetime.now(timezone.utc)
+    audit(db, org_id, "membership.invitation_revoked", "organisation_invitation", invitation.id)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.post("/api/v1/objects", dependencies=[Depends(require_token)], status_code=201)
