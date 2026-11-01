@@ -371,6 +371,33 @@ def list_orgs(
     return [{"id": o.id, "name": o.name, "slug": o.slug} for o in organisations]
 
 
+@app.get("/api/v1/me", dependencies=[Depends(require_token)])
+def current_user(
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    set_user_context(db, principal.user_id)
+    if principal.is_preview and db.bind and db.bind.dialect.name == "sqlite":
+        memberships = []
+    else:
+        memberships = db.scalars(
+            select(OrganisationMembership)
+            .where(OrganisationMembership.user_id == principal.user_id)
+            .order_by(OrganisationMembership.created_at.asc())
+        ).all()
+    return {
+        "user_id": principal.user_id,
+        "issuer": principal.issuer,
+        "subject": principal.subject,
+        "email": principal.email,
+        "preview": principal.is_preview,
+        "organisations": [
+            {"id": item.org_id, "role": item.role}
+            for item in memberships
+        ],
+    }
+
+
 @app.post("/api/v1/objects", dependencies=[Depends(require_token)], status_code=201)
 def create_object(
     payload: ObjectIn, org: Organisation = Depends(org_scope), db: Session = Depends(get_db)
