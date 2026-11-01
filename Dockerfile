@@ -4,8 +4,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY mosaic ./mosaic
+COPY migrations ./migrations
+COPY alembic.ini ./alembic.ini
 COPY static ./static
 RUN useradd --create-home appuser && mkdir -p /data && chown -R appuser:appuser /app /data
 USER appuser
 EXPOSE 10000
-CMD ["sh", "-c", "uvicorn mosaic.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn mosaic.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
