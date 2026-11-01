@@ -7,5 +7,5 @@ COPY mosaic ./mosaic
 COPY static ./static
 RUN useradd --create-home appuser && mkdir -p /data && chown -R appuser:appuser /app /data
 USER appuser
-EXPOSE 8000
-CMD ["uvicorn", "mosaic.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 10000
+CMD ["sh", "-c", "uvicorn mosaic.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
