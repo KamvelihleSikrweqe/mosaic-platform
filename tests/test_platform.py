@@ -211,7 +211,7 @@ def test_verified_single_use_organisation_invitation_and_membership_lifecycle():
         )
         assert invitation.status_code == 201, invitation.text
         token = invitation.json()["acceptance_token"]
-        assert token and token not in invitation.text.split('"token_hash"')[-1]
+        assert token and "token_hash" not in invitation.text
 
         unverified = Principal(
             user_id="d" * 64, issuer="https://identity.example", subject="new-member",
