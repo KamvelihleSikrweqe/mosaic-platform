@@ -5,6 +5,24 @@ function b64url(bytes){return btoa(String.fromCharCode(...new Uint8Array(bytes))
 function randomText(size=32){const bytes=crypto.getRandomValues(new Uint8Array(size));return b64url(bytes);}
 async function pkceChallenge(verifier){return b64url(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier)));}
 function decodeJwt(token){const part=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');const padded=part+'='.repeat((4-part.length%4)%4);return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(padded),c=>c.charCodeAt(0))));}
+function decodeBase64Url(value){const raw=value.replace(/-/g,'+').replace(/_/g,'/');return Uint8Array.from(atob(raw+'='.repeat((4-raw.length%4)%4)),c=>c.charCodeAt(0));}
+async function validateIdToken(token,expectedNonce){
+  const parts=token.split('.');
+  if(parts.length!==3)throw new Error('Malformed identity token.');
+  const header=JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[0])));
+  const claims=JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[1])));
+  if(header.alg!=='RS256'||!header.kid)throw new Error('Unsupported identity token signing algorithm.');
+  const response=await fetch(state.auth.issuer+'/protocol/openid-connect/certs');
+  if(!response.ok)throw new Error('Could not retrieve identity provider signing keys.');
+  const jwks=await response.json(),jwk=jwks.keys.find(key=>key.kid===header.kid&&key.use==='sig'&&key.kty==='RSA');
+  if(!jwk)throw new Error('Identity token signing key was not found.');
+  const key=await crypto.subtle.importKey('jwk',jwk,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['verify']);
+  const valid=await crypto.subtle.verify('RSASSA-PKCS1-v1_5',key,decodeBase64Url(parts[2]),new TextEncoder().encode(parts[0]+'.'+parts[1]));
+  const audience=Array.isArray(claims.aud)?claims.aud:[claims.aud];
+  if(!valid||claims.iss!==state.auth.issuer||!audience.includes(state.auth.client_id)||Number(claims.exp)*1000<=Date.now()||claims.nonce!==expectedNonce)
+    throw new Error('Identity token validation failed.');
+  return claims;
+}
 function saveSession(){sessionStorage.setItem(tokenStore,JSON.stringify({accessToken:state.accessToken,refreshToken:state.refreshToken,idToken:state.idToken,expiresAt:state.expiresAt}));}
 function clearSession(){state.accessToken=null;state.refreshToken=null;state.idToken=null;state.expiresAt=0;sessionStorage.removeItem(tokenStore);}
 function setSession(tokens){
@@ -45,7 +63,7 @@ async function handleOidcCallback(){
   sessionStorage.removeItem('mosaic.oidc.transaction');
   if(!transaction||!returnedState||returnedState!==transaction.state)throw new Error('Login state validation failed. Start sign-in again.');
   const tokens=await tokenRequest({grant_type:'authorization_code',code,redirect_uri:state.auth.redirect_uri,code_verifier:transaction.verifier});
-  if(!tokens.id_token||decodeJwt(tokens.id_token).nonce!==transaction.nonce)throw new Error('Identity token nonce validation failed.');
+  if(!tokens.id_token)throw new Error('Identity provider did not return an identity token.');\n  await validateIdToken(tokens.id_token,transaction.nonce);
   setSession(tokens);
   return true;
 }
