@@ -19,8 +19,12 @@
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["http://localhost:8000/"],
-      "webOrigins": ["http://localhost:8000"],
+      "redirectUris": [
+        "http://localhost:8000/"
+      ],
+      "webOrigins": [
+        "http://localhost:8000"
+      ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:8000/"
@@ -40,6 +44,18 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "mosaic-api",
+      "name": "MOSAIC API Resource",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
     }
   ]
 }
