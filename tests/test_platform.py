@@ -489,3 +489,46 @@ def test_verified_single_use_organisation_invitation_and_membership_lifecycle():
         assert len(client.get(f"/api/v1/organisations/{org_id}/members", headers=H).json()) == 1
     finally:
         app.dependency_overrides.clear()
+
+
+
+def test_application_deployment_plan_is_immutable_tenant_scoped_and_does_not_execute():
+    workspace = org("Deployment Workspace", "deployment-workspace")
+    other = org("Deployment Other", "deployment-other")
+    headers = {**H, "X-Organisation-ID": workspace.json()["id"]}
+    other_headers = {**H, "X-Organisation-ID": other.json()["id"]}
+    created = client.post("/api/v1/apps", json={
+        "name": "Deployable app",
+        "config": {"schemaVersion": "1.0", "pages": [{
+            "id": "home", "name": "Home", "type": "dashboard",
+            "components": [{"id": "title", "type": "heading", "props": {"text": "Hello"}}],
+        }]},
+    }, headers=headers)
+    assert created.status_code == 201, created.text
+    app_id = created.json()["id"]
+    published = client.post(f"/api/v1/apps/{app_id}/publish", headers=headers)
+    assert published.status_code == 200, published.text
+    releases = client.get(f"/api/v1/apps/{app_id}/releases", headers=headers)
+    release = next(item for item in releases.json() if item["environment"] == "production")
+
+    planned = client.post(f"/api/v1/apps/{app_id}/deployments", json={
+        "release_id": release["id"], "environment": "production",
+        "provider": "docker", "target": "local",
+    }, headers=headers)
+    assert planned.status_code == 201, planned.text
+    body = planned.json()
+    assert body["status"] == "planned"
+    assert body["health_status"] == "not_started"
+    assert body["artifact_digest"].startswith("sha256:")
+    assert body["execution"]["state"] == "adapter_not_provisioned"
+    assert "No infrastructure was provisioned" in body["execution"]["message"]
+
+    history = client.get(f"/api/v1/apps/{app_id}/deployments", headers=headers)
+    assert history.status_code == 200
+    assert history.json()[0]["id"] == body["id"]
+    assert client.get(
+        f"/api/v1/apps/{app_id}/deployments/{body['id']}", headers=other_headers
+    ).status_code == 404
+    assert client.post(f"/api/v1/apps/{app_id}/deployments", json={
+        "release_id": release["id"], "environment": "staging",
+    }, headers=headers).status_code == 404
