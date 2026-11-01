@@ -1,0 +1,13 @@
+services:
+  mosaic:
+    build: .
+    # Bind to loopback only: this is a local demo, not a shared deployment.
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      DATABASE_URL: sqlite:////data/mosaic.db
+      MOSAIC_ALLOW_INSECURE_DEMO: "true"
+    volumes:
+      - mosaic-data:/data
+    restart: unless-stopped
+volumes:
+  mosaic-data:
