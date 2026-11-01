@@ -44,6 +44,9 @@ def main(argv=None):
     export = sub.add_parser("export", help="Export an application manifest from a workspace")
     export.add_argument("--app-id", required=True)
     export.add_argument("--output", type=Path, default=Path("mosaic-app.json"))
+    push = sub.add_parser("push", help="Save a local manifest as the next application version")
+    push.add_argument("--app-id", required=True)
+    push.add_argument("--file", type=Path, required=True)
     release = sub.add_parser("release", help="Release the current application manifest to an environment")
     release.add_argument("--app-id", required=True)
     release.add_argument("--environment", choices=("development", "staging", "production"), required=True)
@@ -66,6 +69,15 @@ def main(argv=None):
                 raise MosaicError("Remote manifest is invalid: " + "; ".join(errors))
             args.output.write_text(json.dumps(app["config"], indent=2) + "\n", encoding="utf-8")
             print(f"Exported {app['name']} to {args.output}")
+            return 0
+        if args.command == "push":
+            manifest = json.loads(args.file.read_text(encoding="utf-8"))
+            errors = validate_manifest(manifest)
+            if errors:
+                raise MosaicError("Local manifest is invalid: " + "; ".join(errors))
+            app = client.get_app(args.app_id)
+            result = client.save_manifest(args.app_id, manifest, app["version"])
+            print(f"Saved {result['name']} as version {result['version']}")
             return 0
         result = client.release(args.app_id, args.environment)
         print(f"Released {result['app_id']} as v{result['version']} to {result['environment']}")
