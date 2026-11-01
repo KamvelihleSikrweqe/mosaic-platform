@@ -171,6 +171,9 @@ def test_oidc_principal_owns_only_its_organisation():
         )
         assert object_response.status_code == 201, object_response.text
         assert any(item["id"] == org_id for item in client.get("/api/v1/organisations", headers=H).json())
+        me = client.get("/api/v1/me", headers=H)
+        assert me.status_code == 200
+        assert me.json()["organisations"] == [{"id": org_id, "role": "owner"}]
 
         stranger = Principal(
             user_id="b" * 64,
@@ -182,5 +185,6 @@ def test_oidc_principal_owns_only_its_organisation():
         denied = client.get("/api/v1/objects", headers=owner_headers)
         assert denied.status_code == 404
         assert client.get("/api/v1/organisations", headers=H).json() == []
+        assert client.get("/api/v1/me", headers=H).json()["organisations"] == []
     finally:
         app.dependency_overrides.clear()
