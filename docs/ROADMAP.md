@@ -51,7 +51,7 @@ Every release requires automated tests, dependency and container scanning, migra
 ## Next engineering gates after the Studio foundation
 
 - Complete browser end-to-end tests for Studio editing, data bindings and workflow actions.
-- Add deployment adapters that provision isolated runtime instances from immutable releases.
+- [x] Add tenant-scoped deployment intent, immutable manifest digests and provider adapter contract.\n- Add provider workers that provision isolated runtime instances from immutable releases.
 - Add environment-scoped configuration/secrets and signed artifacts before any customer-code execution.
 - Add rollback and release promotion with explicit approval and audit.
 - Harden production identity, PostgreSQL RLS, backups, observability and security testing before onboarding real tenants.

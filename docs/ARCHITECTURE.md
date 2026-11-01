@@ -29,3 +29,7 @@ Use versioned manifests and stable contracts. Extension types include UI modules
 
 ## Execution safety
 Do not run customer code in the control plane. The current application runtime is declarative and executes only registered components and allow-listed API actions. Do not add dynamic JavaScript, Python, shell or HTML evaluation to the application manifest. For custom code, use WASM or ephemeral isolated containers with no ambient credentials, strict CPU/memory/time limits, outbound network policy, filesystem isolation and per-execution identity. Start with declarative workflows and a small allow-listed action set.
+
+
+## Deployment control-plane foundation
+Deployment intent is stored separately from immutable application releases. Each deployment record is tenant- and application-scoped, points to one ready release in the same logical environment, and records a canonical SHA-256 digest of its manifest. The initial Docker adapter creates a declarative plan only. It does not provision containers, issue URLs, execute tenant code, or claim runtime health. A provider worker must be implemented and threat-reviewed before deployment status can advance beyond `planned`.
