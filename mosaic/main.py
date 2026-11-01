@@ -15,7 +15,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models import Application, AuditEvent, DataObject, DataRecord, Organisation, Workflow
+from .auth import Principal, get_current_principal, oidc_enabled
+from .models import Application, AuditEvent, DataObject, DataRecord, Organisation, OrganisationMembership, Workflow
 
 app = FastAPI(
     title="MOSAIC Platform",
@@ -30,6 +31,11 @@ app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 async def preview_basic_auth(request, call_next):
     # Single-operator preview gate. This is not enterprise identity or tenant authorisation.
     if request.url.path in {"/health", "/health/live", "/health/ready"}:
+        return await call_next(request)
+    oidc_vars = ("OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_JWKS_URL")
+    if any(os.getenv(key) for key in oidc_vars):
+        if not oidc_enabled():
+            return JSONResponse({"detail": "OIDC configuration is incomplete"}, status_code=503)
         return await call_next(request)
     expected_password = os.getenv("MOSAIC_PREVIEW_PASSWORD")
     expected_username = os.getenv("MOSAIC_PREVIEW_USERNAME", "owner")
@@ -58,6 +64,13 @@ async def preview_basic_auth(request, call_next):
             status_code=401,
             headers={"WWW-Authenticate": 'Basic realm="MOSAIC preview", charset="UTF-8"'},
         )
+    request.state.principal = {
+        "user_id": "preview:owner",
+        "issuer": "preview",
+        "subject": "owner",
+        "email": None,
+        "is_preview": True,
+    }
     return await call_next(request)
 
 
@@ -87,19 +100,44 @@ class RecordIn(BaseModel):
     data: dict
 
 
-def require_token():
-    # Authentication is enforced globally by preview_basic_auth middleware.
-    return None
+def require_token(principal: Principal = Depends(get_current_principal)):
+    return principal
+
+
+def set_user_context(db: Session, user_id: str):
+    if db.bind and db.bind.dialect.name == "postgresql":
+        db.execute(text("SELECT set_config('app.current_user_id', :value, true)"), {"value": user_id})
+
+
+def set_tenant_context(db: Session, org_id: str):
+    if db.bind and db.bind.dialect.name == "postgresql":
+        db.execute(text("SELECT set_config('app.current_org_id', :value, true)"), {"value": org_id})
 
 
 def org_scope(
+    request: Request,
     x_org_id: str = Header(..., alias="X-Organisation-ID"),
+    principal: Principal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    # Workspace selector for the single-operator preview, not verified membership.
+    set_user_context(db, principal.user_id)
+    if not principal.is_preview:
+        membership = db.scalar(
+            select(OrganisationMembership).where(
+                OrganisationMembership.org_id == x_org_id,
+                OrganisationMembership.user_id == principal.user_id,
+            )
+        )
+        if not membership:
+            raise HTTPException(404, "Organisation not found")
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and membership.role not in {
+            "owner", "admin", "builder", "operator"
+        }:
+            raise HTTPException(403, "Your organisation role cannot perform this action")
     org = db.get(Organisation, x_org_id)
     if not org:
         raise HTTPException(404, "Organisation not found")
+    set_tenant_context(db, org.id)
     return org
 
 
@@ -176,8 +214,13 @@ def platform():
 
 
 @app.post("/api/v1/demo/supplier-onboarding", dependencies=[Depends(require_token)])
-def load_supplier_onboarding_demo(db: Session = Depends(get_db)):
+def load_supplier_onboarding_demo(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
     """Create or reuse a complete, fictional supplier-onboarding demo workspace."""
+    if not principal.is_preview:
+        raise HTTPException(403, "The shared demo seed is available only in preview mode")
     org = db.scalar(select(Organisation).where(Organisation.slug == "mosaic-demo"))
     if not org:
         org = Organisation(id=str(uuid4()), name="MOSAIC Demo Workspace", slug="mosaic-demo")
@@ -287,12 +330,23 @@ def load_supplier_onboarding_demo(db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/organisations", dependencies=[Depends(require_token)], status_code=201)
-def create_org(payload: OrgIn, db: Session = Depends(get_db)):
+def create_org(
+    payload: OrgIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    set_user_context(db, principal.user_id)
     if db.scalar(select(Organisation).where(Organisation.slug == payload.slug)):
         raise HTTPException(409, "Slug already exists")
     org = Organisation(id=str(uuid4()), name=payload.name, slug=payload.slug)
+    set_tenant_context(db, org.id)
     db.add(org)
     db.flush()
+    if not principal.is_preview:
+        db.add(OrganisationMembership(
+            id=str(uuid4()), org_id=org.id, user_id=principal.user_id,
+            issuer=principal.issuer, subject=principal.subject, email=principal.email, role="owner",
+        ))
     audit(db, org.id, "organisation.created", "organisation", org.id, {"slug": org.slug})
     db.commit()
     db.refresh(org)
@@ -300,11 +354,21 @@ def create_org(payload: OrgIn, db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/organisations", dependencies=[Depends(require_token)])
-def list_orgs(db: Session = Depends(get_db)):
-    return [
-        {"id": o.id, "name": o.name, "slug": o.slug}
-        for o in db.scalars(select(Organisation).order_by(Organisation.name)).all()
-    ]
+def list_orgs(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    set_user_context(db, principal.user_id)
+    if principal.is_preview and db.bind and db.bind.dialect.name == "sqlite":
+        organisations = db.scalars(select(Organisation).order_by(Organisation.name)).all()
+    else:
+        organisations = db.scalars(
+            select(Organisation)
+            .join(OrganisationMembership, OrganisationMembership.org_id == Organisation.id)
+            .where(OrganisationMembership.user_id == principal.user_id)
+            .order_by(Organisation.name)
+        ).all()
+    return [{"id": o.id, "name": o.name, "slug": o.slug} for o in organisations]
 
 
 @app.post("/api/v1/objects", dependencies=[Depends(require_token)], status_code=201)
