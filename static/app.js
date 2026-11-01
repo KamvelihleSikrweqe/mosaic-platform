@@ -240,10 +240,11 @@ $('#loadDemo').addEventListener('click',async()=>{
   finally{button.disabled=false;button.textContent='Load supplier demo';}
 });
 document.addEventListener('click',async event=>{
-  const publish=event.target.closest('[data-publish]'),preview=event.target.closest('[data-preview]'),enable=event.target.closest('[data-enable]'),run=event.target.closest('[data-run]'),history=event.target.closest('[data-history]'),approval=event.target.closest('[data-approval]');
-  if(!publish&&!preview&&!enable&&!run&&!history&&!approval)return;
-  const button=publish||preview||enable||run||history||approval;if(button)button.disabled=true;
+  const publish=event.target.closest('[data-publish]'),preview=event.target.closest('[data-preview]'),studio=event.target.closest('[data-studio]'),enable=event.target.closest('[data-enable]'),run=event.target.closest('[data-run]'),history=event.target.closest('[data-history]'),approval=event.target.closest('[data-approval]');
+  if(!publish&&!preview&&!studio&&!enable&&!run&&!history&&!approval)return;
+  const button=publish||preview||studio||enable||run||history||approval;if(button)button.disabled=true;
   try{
+    if(studio){if(!state.org)throw new Error('Select an organisation first.');window.location.assign('/apps/'+encodeURIComponent(studio.dataset.studio)+'/studio?org_id='+encodeURIComponent(state.org));return;}
     if(preview){if(!state.org)throw new Error('Select an organisation first.');window.location.assign('/apps/'+encodeURIComponent(preview.dataset.preview)+'/preview?org_id='+encodeURIComponent(state.org));return;}
     if(publish){await api('/apps/'+encodeURIComponent(publish.dataset.publish)+'/publish',{method:'POST'});toast('Application metadata published.');}
     if(enable){await api('/workflows/'+encodeURIComponent(enable.dataset.enable)+'/enable',{method:'POST'});toast('Workflow enabled and ready to run.');}
