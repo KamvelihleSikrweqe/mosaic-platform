@@ -141,6 +141,12 @@ def home():
     return FileResponse(ROOT / "static" / "index.html")
 
 
+@app.get("/demo/suppliers")
+def supplier_portal_demo():
+    """Serve the runnable supplier onboarding demo application."""
+    return FileResponse(ROOT / "static" / "supplier-portal.html")
+
+
 @app.get("/health")
 @app.get("/health/live")
 def health_live():
