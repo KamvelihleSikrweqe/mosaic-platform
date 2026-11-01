@@ -128,3 +128,20 @@ class ApplicationRelease(Base):
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="ready")
     manifest: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class ApplicationDeployment(Base):
+    __tablename__ = "application_deployments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organisations.id", ondelete="CASCADE"), index=True)
+    app_id: Mapped[str] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"), index=True)
+    release_id: Mapped[str] = mapped_column(ForeignKey("application_releases.id", ondelete="CASCADE"), index=True)
+    environment: Mapped[str] = mapped_column(String(30), nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    target: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="planned")
+    health_status: Mapped[str] = mapped_column(String(30), nullable=False, default="unknown")
+    artifact_digest: Mapped[str] = mapped_column(String(80), nullable=False)
+    deployment_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
