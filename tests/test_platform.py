@@ -8,6 +8,7 @@ os.environ["MOSAIC_PREVIEW_PASSWORD"] = "test-password"
 
 from fastapi.testclient import TestClient
 from mosaic.main import app
+from mosaic.auth import Principal, get_current_principal
 from mosaic.db import Base, engine
 
 Base.metadata.create_all(bind=engine)
@@ -142,3 +143,44 @@ def test_supplier_demo_seed_is_idempotent():
     )
     assert records.status_code == 200
     assert len(records.json()) == 2
+
+
+
+def test_oidc_principal_owns_only_its_organisation():
+    owner = Principal(
+        user_id="a" * 64,
+        issuer="https://identity.example",
+        subject="user-a",
+        email="owner@example.test",
+    )
+    app.dependency_overrides[get_current_principal] = lambda: owner
+    try:
+        created = client.post(
+            "/api/v1/organisations",
+            json={"name": "Owned Workspace", "slug": "owned-" + uuid4().hex[:8]},
+            headers=H,
+        )
+        assert created.status_code == 201, created.text
+        org_id = created.json()["id"]
+
+        owner_headers = {**H, "X-Organisation-ID": org_id}
+        object_response = client.post(
+            "/api/v1/objects",
+            json={"key": "supplier", "label": "Supplier", "schema": {"type": "object"}},
+            headers=owner_headers,
+        )
+        assert object_response.status_code == 201, object_response.text
+        assert any(item["id"] == org_id for item in client.get("/api/v1/organisations", headers=H).json())
+
+        stranger = Principal(
+            user_id="b" * 64,
+            issuer="https://identity.example",
+            subject="user-b",
+            email="stranger@example.test",
+        )
+        app.dependency_overrides[get_current_principal] = lambda: stranger
+        denied = client.get("/api/v1/objects", headers=owner_headers)
+        assert denied.status_code == 404
+        assert client.get("/api/v1/organisations", headers=H).json() == []
+    finally:
+        app.dependency_overrides.clear()
