@@ -197,7 +197,8 @@
     if (!match) throw new Error("Application preview URL is invalid.");
     state.orgId = new URLSearchParams(location.search).get("org_id");
     if (!state.orgId) throw new Error("No organisation was selected. Return to the platform and open Preview from an organisation workspace.");
-    state.app = await api("/apps/" + encodeURIComponent(decodeURIComponent(match[1])) + "/runtime");
+    const previewMode = new URLSearchParams(location.search).get("preview") === "true";
+    state.app = await api("/apps/" + encodeURIComponent(decodeURIComponent(match[1])) + "/runtime" + (previewMode ? "?preview=true" : ""));
     if (state.app.organisation.id !== state.orgId) throw new Error("Organisation context mismatch.");
     document.title = state.app.name + " · MOSAIC";
     $("#runtimeOrg").textContent = state.app.organisation.name;
