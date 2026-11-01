@@ -2,6 +2,7 @@ import base64
 import binascii
 import hmac
 import hashlib
+import json
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -27,6 +28,7 @@ app = FastAPI(
     description="Programmable business infrastructure — controlled developer preview",
 )
 ROOT = Path(__file__).resolve().parent.parent
+MANIFEST_SCHEMA = json.loads((ROOT / "schemas" / "application-manifest-v1.schema.json").read_text(encoding="utf-8"))
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
 
@@ -807,6 +809,11 @@ def delete_record(
 def validate_application_manifest(config: dict, org_id: str, db: Session):
     if not isinstance(config, dict):
         raise HTTPException(422, "Application manifest must be a JSON object")
+    errors = sorted(Draft202012Validator(MANIFEST_SCHEMA).iter_errors(config), key=lambda error: list(error.absolute_path))
+    if errors:
+        error = errors[0]
+        location = ".".join(str(part) for part in error.absolute_path) or "$"
+        raise HTTPException(422, f"Invalid application manifest at {location}: {error.message}")
     schema_version = config.get("schemaVersion", "1.0")
     if schema_version != "1.0":
         raise HTTPException(422, "Unsupported application manifest schemaVersion")
