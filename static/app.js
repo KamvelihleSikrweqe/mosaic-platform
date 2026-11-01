@@ -83,7 +83,8 @@ async function initAuth(){
 }
 async function api(path,opts={}){
   const headers={'Content-Type':'application/json',...(opts.headers||{})};
-  if(state.authMode){await ensureAccessToken();headers.Authorization='Bearer '+state.accessToken;}\n  if(state.org) headers['X-Organisation-ID']=state.org;
+  if(state.authMode){await ensureAccessToken();headers.Authorization='Bearer '+state.accessToken;}
+  if(state.org) headers['X-Organisation-ID']=state.org;
   let response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});
   if(response.status===401&&state.authMode&&state.refreshToken){await refreshSession();headers.Authorization='Bearer '+state.accessToken;response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});}
   const data=response.status===204?null:await response.json().catch(()=>({detail:response.statusText}));
