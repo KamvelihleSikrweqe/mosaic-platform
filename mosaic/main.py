@@ -469,6 +469,26 @@ def create_invitation(org_id: str, payload: InvitationIn,
             "delivery": "manual", "message": "Deliver this token through a trusted channel. It is shown only once."}
 
 
+@app.get("/api/v1/organisations/{org_id}/invitations")
+def list_invitations(org_id: str, principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db)):
+    set_user_context(db, principal.user_id)
+    set_tenant_context(db, org_id)
+    org = db.get(Organisation, org_id)
+    if not org:
+        raise HTTPException(404, "Organisation not found")
+    require_org_admin(org, principal, db)
+    invitations = db.scalars(select(OrganisationInvitation).where(
+        OrganisationInvitation.org_id == org_id,
+        OrganisationInvitation.accepted_at.is_(None),
+        OrganisationInvitation.revoked_at.is_(None),
+    ).order_by(OrganisationInvitation.created_at.desc())).all()
+    now = datetime.now(timezone.utc)
+    return [{"id": item.id, "email": item.email, "role": item.role,
+             "expires_at": item.expires_at, "expired": item.expires_at.replace(tzinfo=timezone.utc) <= now}
+            for item in invitations]
+
+
 @app.get("/api/v1/organisations/{org_id}/members")
 def list_members(org_id: str, principal: Principal = Depends(get_current_principal),
     db: Session = Depends(get_db)):
