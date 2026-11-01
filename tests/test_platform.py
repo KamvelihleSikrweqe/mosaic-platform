@@ -1,14 +1,16 @@
 import os
+import base64
 from uuid import uuid4
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_mosaic.db"
-os.environ["MOSAIC_ALLOW_INSECURE_DEMO"] = "true"
+os.environ["MOSAIC_PREVIEW_USERNAME"] = "owner"
+os.environ["MOSAIC_PREVIEW_PASSWORD"] = "test-password"
 
 from fastapi.testclient import TestClient
 from mosaic.main import app
 
 client = TestClient(app)
-H = {"Authorization": "Bearer mosaic-local-demo"}
+H = {"Authorization": "Basic " + base64.b64encode(b"owner:test-password").decode()}
 
 def org(name, slug):
     return client.post("/api/v1/organisations", json={"name": name, "slug": slug + "-" + uuid4().hex[:8]}, headers=H)
@@ -40,3 +42,10 @@ def test_workflow_definition_validation():
     assert good.status_code == 201
     bad = client.post("/api/v1/workflows", json={"name": "Unsafe", "definition": {"steps": [{"type": "python", "code": "import os"}]}}, headers=h)
     assert bad.status_code == 422
+
+
+def test_preview_requires_basic_authentication():
+    assert client.get("/").status_code == 401
+    assert client.get("/health").status_code == 200
+    bad = {"Authorization": "Basic " + base64.b64encode(b"owner:wrong").decode()}
+    assert client.get("/api/v1/organisations", headers=bad).status_code == 401
