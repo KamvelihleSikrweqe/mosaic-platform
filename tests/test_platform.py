@@ -92,8 +92,91 @@ def test_application_runtime_manifest_is_tenant_scoped_and_validates_data_source
         ]}},
         headers=headers,
     )
-    assert invalid.status_code == 201
-    assert client.get(f"/api/v1/apps/{invalid.json()['id']}/runtime", headers=headers).status_code == 200
+    assert invalid.status_code == 422
+
+
+
+def test_application_studio_manifest_editing_and_environment_releases():
+    workspace = org("Studio Workspace", "studio-workspace")
+    other = org("Studio Other", "studio-other")
+    headers = {**H, "X-Organisation-ID": workspace.json()["id"]}
+    other_headers = {**H, "X-Organisation-ID": other.json()["id"]}
+    obj = client.post("/api/v1/objects", json={
+        "key": "supplier", "label": "Supplier", "schema": {"type": "object"}
+    }, headers=headers)
+    assert obj.status_code == 201
+    app_response = client.post("/api/v1/apps", json={
+        "name": "Supplier Studio", "config": {
+            "schemaVersion": "1.0",
+            "pages": [{"id": "home", "name": "Home", "type": "dashboard", "components": [
+                {"id": "heading-1", "type": "heading", "props": {"text": "Suppliers"}}
+            ]}],
+        },
+    }, headers=headers)
+    assert app_response.status_code == 201, app_response.text
+    app_id = app_response.json()["id"]
+
+    registry = client.get("/api/v1/app-components", headers=H)
+    assert registry.status_code == 200
+    assert {item["type"] for item in registry.json()} >= {"heading", "data-table", "button"}
+
+    changed = client.put(f"/api/v1/apps/{app_id}", json={
+        "expected_version": 1, "config": {
+            "schemaVersion": "1.0",
+            "pages": [{"id": "home", "name": "Home", "type": "dashboard", "components": [
+                {"id": "heading-1", "type": "heading", "props": {"text": "Supplier operations"}}
+            ]}],
+        },
+    }, headers=headers)
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["version"] == 2
+    stale = client.put(f"/api/v1/apps/{app_id}", json={
+        "expected_version": 1, "config": {"pages": []}
+    }, headers=headers)
+    assert stale.status_code == 409
+
+    staging = client.post(f"/api/v1/apps/{app_id}/releases", json={
+        "environment": "staging"
+    }, headers=headers)
+    assert staging.status_code == 201, staging.text
+    assert staging.json()["version"] == 3
+    release_id = staging.json()["id"]
+    release = client.get(
+        f"/api/v1/apps/{app_id}/releases/{release_id}", headers=headers
+    )
+    assert release.status_code == 200
+    assert release.json()["manifest"]["pages"][0]["components"][0]["props"]["text"] == "Supplier operations"
+    assert client.get(
+        f"/api/v1/apps/{app_id}/releases/{release_id}", headers=other_headers
+    ).status_code == 404
+
+    production = client.post(f"/api/v1/apps/{app_id}/publish", headers=headers)
+    assert production.status_code == 200
+    assert production.json()["version"] == 4
+    releases = client.get(f"/api/v1/apps/{app_id}/releases", headers=headers)
+    assert {item["environment"] for item in releases.json()} == {"staging", "production"}
+
+
+def test_application_manifest_rejects_unregistered_components_and_unapproved_actions():
+    workspace = org("Manifest Validation", "manifest-validation")
+    headers = {**H, "X-Organisation-ID": workspace.json()["id"]}
+    unsupported = client.post("/api/v1/apps", json={
+        "name": "Unsafe UI", "config": {"pages": [{
+            "name": "Home", "type": "dashboard",
+            "components": [{"type": "raw-html", "props": {"html": "<script>alert(1)</script>"}}],
+        }]},
+    }, headers=headers)
+    assert unsupported.status_code == 422
+    unapproved = client.post("/api/v1/apps", json={
+        "name": "Unsafe Action", "config": {"pages": [{
+            "name": "Home", "type": "dashboard",
+            "components": [{"type": "button", "action": {
+                "type": "javascript.eval", "code": "alert(1)"
+            }}],
+        }]},
+    }, headers=headers)
+    assert unapproved.status_code == 422
+
 
 
 def test_workflow_definition_validation():
