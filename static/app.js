@@ -1,9 +1,90 @@
 const $=s=>document.querySelector(s);
-const state={org:null,orgs:[]};
+const state={org:null,orgs:[],auth:null,accessToken:null,refreshToken:null,idToken:null,expiresAt:0,authMode:false};
+const tokenStore='mosaic.oidc.session';
+function b64url(bytes){return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');}
+function randomText(size=32){const bytes=crypto.getRandomValues(new Uint8Array(size));return b64url(bytes);}
+async function pkceChallenge(verifier){return b64url(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier)));}
+function decodeJwt(token){const part=token.split('.')[1];return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(part.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))));}
+function saveSession(){sessionStorage.setItem(tokenStore,JSON.stringify({accessToken:state.accessToken,refreshToken:state.refreshToken,idToken:state.idToken,expiresAt:state.expiresAt}));}
+function clearSession(){state.accessToken=null;state.refreshToken=null;state.idToken=null;state.expiresAt=0;sessionStorage.removeItem(tokenStore);}
+function setSession(tokens){
+  state.accessToken=tokens.access_token;state.refreshToken=tokens.refresh_token||state.refreshToken;
+  state.idToken=tokens.id_token||state.idToken;state.expiresAt=Date.now()+Number(tokens.expires_in||300)*1000;
+  saveSession();
+}
+async function tokenRequest(params){
+  const response=await fetch(state.auth.issuer+'/protocol/openid-connect/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({...params,client_id:state.auth.client_id})});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(data.error_description||data.error||'Identity provider token exchange failed');
+  return data;
+}
+async function refreshSession(){
+  if(!state.refreshToken)throw new Error('Your session has expired. Sign in again.');
+  try{setSession(await tokenRequest({grant_type:'refresh_token',refresh_token:state.refreshToken}));}
+  catch(error){clearSession();throw new Error('Your session has expired. Please sign in again.');}
+}
+async function ensureAccessToken(){
+  if(state.accessToken&&Date.now()<state.expiresAt-30000)return;
+  if(state.refreshToken){await refreshSession();return;}
+  throw new Error('Sign in to continue.');
+}
+async function startLogin(){
+  const verifier=randomText(48),stateValue=randomText(24),nonce=randomText(24);
+  sessionStorage.setItem('mosaic.oidc.transaction',JSON.stringify({verifier,state:stateValue,nonce}));
+  const challenge=await pkceChallenge(verifier);
+  const url=new URL(state.auth.issuer+'/protocol/openid-connect/auth');
+  url.search=new URLSearchParams({client_id:state.auth.client_id,redirect_uri:state.auth.redirect_uri,response_type:'code',scope:state.auth.scopes.join(' '),state:stateValue,nonce,code_challenge:challenge,code_challenge_method:'S256'});
+  location.assign(url);
+}
+async function handleOidcCallback(){
+  const params=new URLSearchParams(location.search),code=params.get('code'),returnedState=params.get('state'),error=params.get('error');
+  if(!code&&!error)return false;
+  history.replaceState({},document.title,location.pathname+location.hash);
+  if(error)throw new Error(params.get('error_description')||error);
+  const transaction=JSON.parse(sessionStorage.getItem('mosaic.oidc.transaction')||'null');
+  sessionStorage.removeItem('mosaic.oidc.transaction');
+  if(!transaction||!returnedState||returnedState!==transaction.state)throw new Error('Login state validation failed. Start sign-in again.');
+  const tokens=await tokenRequest({grant_type:'authorization_code',code,redirect_uri:state.auth.redirect_uri,code_verifier:transaction.verifier});
+  if(!tokens.id_token||decodeJwt(tokens.id_token).nonce!==transaction.nonce)throw new Error('Identity token nonce validation failed.');
+  setSession(tokens);
+  return true;
+}
+async function endLogin(){
+  const idToken=state.idToken;clearSession();
+  const url=new URL(state.auth.issuer+'/protocol/openid-connect/logout');
+  url.search=new URLSearchParams({post_logout_redirect_uri:state.auth.redirect_uri,client_id:state.auth.client_id,...(idToken?{id_token_hint:idToken}:{})});
+  location.assign(url);
+}
+function renderAuth(){
+  const action=$('#authAction'),status=$('#authStatus');
+  if(!state.authMode){action.hidden=true;status.hidden=true;return;}
+  action.hidden=false;status.hidden=false;
+  const signedIn=Boolean(state.accessToken);
+  action.textContent=signedIn?'Sign out':'Sign in';
+  status.textContent=signedIn?'Signed in':'Authentication required';
+  $('#loadDemo').hidden=true;
+  action.onclick=()=>signedIn?endLogin():startLogin().catch(e=>toast(e.message));
+}
+async function initAuth(){
+  const response=await fetch('/api/v1/auth/config');
+  const config=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(config.detail||'Could not load authentication settings');
+  if(!config.enabled)return;
+  state.auth=config;state.authMode=true;
+  const stored=JSON.parse(sessionStorage.getItem(tokenStore)||'null');
+  if(stored){state.accessToken=stored.accessToken;state.refreshToken=stored.refreshToken;state.idToken=stored.idToken;state.expiresAt=stored.expiresAt||0;}
+  const callback=await handleOidcCallback();
+  if(!callback&&state.accessToken&&Date.now()>=state.expiresAt-30000&&state.refreshToken)await refreshSession();
+  renderAuth();
+  if(!state.accessToken){document.querySelector('main').classList.add('auth-locked');return false;}
+  document.querySelector('main').classList.remove('auth-locked');
+  renderAuth();
+  return true;
+}
 async function api(path,opts={}){
   const headers={'Content-Type':'application/json',...(opts.headers||{})};
-  if(state.org) headers['X-Organisation-ID']=state.org;
-  const response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});
+  if(state.authMode){await ensureAccessToken();headers.Authorization='Bearer '+state.accessToken;}\n  if(state.org) headers['X-Organisation-ID']=state.org;
+  let response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});\n  if(response.status===401&&state.authMode&&state.refreshToken){await refreshSession();headers.Authorization='Bearer '+state.accessToken;response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});}
   const data=response.status===204?null:await response.json().catch(()=>({detail:response.statusText}));
   if(!response.ok) throw new Error(data?.detail||'Request failed ('+response.status+')');
   return data;
@@ -118,4 +199,11 @@ document.addEventListener('click',async event=>{
   }catch(error){toast(error.message);}
   finally{button.disabled=false;}
 });
-loadOrgs().then(refresh).catch(error=>toast('Workspace could not load: '+error.message));
+(async()=>{
+  try{
+    const authenticated=await initAuth();
+    if(state.authMode&&!authenticated){toast('Sign in to access your MOSAIC workspaces.');return;}
+    renderAuth();
+    await loadOrgs();await refresh();
+  }catch(error){renderAuth();toast('Authentication/workspace error: '+error.message);}
+})();
