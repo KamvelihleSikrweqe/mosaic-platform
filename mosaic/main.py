@@ -256,6 +256,18 @@ def browser_auth_config(request: Request):
     }
 
 
+@app.get("/api/v1/app-components", dependencies=[Depends(require_token)])
+def list_app_components():
+    return [
+        {"type": "heading", "label": "Heading", "description": "Section title", "props": {"text": "Section heading"}},
+        {"type": "text", "label": "Text", "description": "Supporting copy", "props": {"text": "Describe this part of the application"}},
+        {"type": "metric", "label": "Metric", "description": "Count records in a data model", "props": {"label": "Total records"}, "binding": {"object": "supplier"}},
+        {"type": "data-table", "label": "Data table", "description": "List records from a data model", "binding": {"object": "supplier"}},
+        {"type": "data-form", "label": "Data form", "description": "Create records in a data model", "binding": {"object": "supplier"}},
+        {"type": "button", "label": "Workflow button", "description": "Start an enabled workflow", "props": {"label": "Run workflow"}},
+    ]
+
+
 @app.get("/api/v1/platform")
 def platform():
     return {
@@ -870,6 +882,12 @@ def list_apps(org: Organisation = Depends(org_scope), db: Session = Depends(get_
     ]
 
 
+@app.get("/apps/{app_id}/studio")
+def application_studio(app_id: str):
+    """Serve the visual application editor; API requests enforce tenant membership."""
+    return FileResponse(ROOT / "static" / "app-studio.html")
+
+
 @app.get("/apps/{app_id}/preview")
 def application_preview(app_id: str):
     """Serve the declarative application runtime shell; tenant access is checked by its API."""
@@ -908,6 +926,12 @@ def get_application_runtime(
         "navigation": config.get("navigation", []),
         "pages": pages,
         "objects": object_index,
+        "workflows": [
+            {"id": workflow.id, "name": workflow.name, "enabled": workflow.enabled}
+            for workflow in db.scalars(select(Workflow).where(
+                Workflow.org_id == org.id, Workflow.enabled.is_(True)
+            )).all()
+        ],
         "organisation": {"id": org.id, "name": org.name},
     }
 
