@@ -1,9 +1,111 @@
 const $=s=>document.querySelector(s);
-const state={org:null,orgs:[]};
+const state={org:null,orgs:[],auth:null,accessToken:null,refreshToken:null,idToken:null,expiresAt:0,authMode:false};
+const tokenStore='mosaic.oidc.session';
+function b64url(bytes){return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+function randomText(size=32){const bytes=crypto.getRandomValues(new Uint8Array(size));return b64url(bytes);}
+async function pkceChallenge(verifier){return b64url(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier)));}
+function decodeJwt(token){const part=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');const padded=part+'='.repeat((4-part.length%4)%4);return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(padded),c=>c.charCodeAt(0))));}
+function decodeBase64Url(value){const raw=value.replace(/-/g,'+').replace(/_/g,'/');return Uint8Array.from(atob(raw+'='.repeat((4-raw.length%4)%4)),c=>c.charCodeAt(0));}
+async function validateIdToken(token,expectedNonce){
+  const parts=token.split('.');
+  if(parts.length!==3)throw new Error('Malformed identity token.');
+  const header=JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[0])));
+  const claims=JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[1])));
+  if(header.alg!=='RS256'||!header.kid)throw new Error('Unsupported identity token signing algorithm.');
+  const response=await fetch(state.auth.issuer+'/protocol/openid-connect/certs');
+  if(!response.ok)throw new Error('Could not retrieve identity provider signing keys.');
+  const jwks=await response.json(),jwk=jwks.keys.find(key=>key.kid===header.kid&&key.use==='sig'&&key.kty==='RSA');
+  if(!jwk)throw new Error('Identity token signing key was not found.');
+  const key=await crypto.subtle.importKey('jwk',jwk,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['verify']);
+  const valid=await crypto.subtle.verify('RSASSA-PKCS1-v1_5',key,decodeBase64Url(parts[2]),new TextEncoder().encode(parts[0]+'.'+parts[1]));
+  const audience=Array.isArray(claims.aud)?claims.aud:[claims.aud];
+  if(!valid||claims.iss!==state.auth.issuer||!audience.includes(state.auth.client_id)||Number(claims.exp)*1000<=Date.now()||claims.nonce!==expectedNonce)
+    throw new Error('Identity token validation failed.');
+  return claims;
+}
+function saveSession(){sessionStorage.setItem(tokenStore,JSON.stringify({accessToken:state.accessToken,refreshToken:state.refreshToken,idToken:state.idToken,expiresAt:state.expiresAt}));}
+function clearSession(){state.accessToken=null;state.refreshToken=null;state.idToken=null;state.expiresAt=0;sessionStorage.removeItem(tokenStore);}
+function setSession(tokens){
+  state.accessToken=tokens.access_token;state.refreshToken=tokens.refresh_token||state.refreshToken;
+  state.idToken=tokens.id_token||state.idToken;state.expiresAt=Date.now()+Number(tokens.expires_in||300)*1000;
+  saveSession();
+}
+async function tokenRequest(params){
+  const response=await fetch(state.auth.issuer+'/protocol/openid-connect/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({...params,client_id:state.auth.client_id})});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(data.error_description||data.error||'Identity provider token exchange failed');
+  return data;
+}
+async function refreshSession(){
+  if(!state.refreshToken)throw new Error('Your session has expired. Sign in again.');
+  try{setSession(await tokenRequest({grant_type:'refresh_token',refresh_token:state.refreshToken}));}
+  catch(error){clearSession();throw new Error('Your session has expired. Please sign in again.');}
+}
+async function ensureAccessToken(){
+  if(state.accessToken&&Date.now()<state.expiresAt-30000)return;
+  if(state.refreshToken){await refreshSession();return;}
+  throw new Error('Sign in to continue.');
+}
+async function startLogin(){
+  const verifier=randomText(48),stateValue=randomText(24),nonce=randomText(24);
+  sessionStorage.setItem('mosaic.oidc.transaction',JSON.stringify({verifier,state:stateValue,nonce}));
+  const challenge=await pkceChallenge(verifier);
+  const url=new URL(state.auth.issuer+'/protocol/openid-connect/auth');
+  url.search=new URLSearchParams({client_id:state.auth.client_id,redirect_uri:state.auth.redirect_uri,response_type:'code',scope:state.auth.scopes.join(' '),state:stateValue,nonce,code_challenge:challenge,code_challenge_method:'S256'});
+  location.assign(url);
+}
+async function handleOidcCallback(){
+  const params=new URLSearchParams(location.search),code=params.get('code'),returnedState=params.get('state'),error=params.get('error');
+  if(!code&&!error)return false;
+  history.replaceState({},document.title,location.pathname+location.hash);
+  if(error)throw new Error(params.get('error_description')||error);
+  const transaction=JSON.parse(sessionStorage.getItem('mosaic.oidc.transaction')||'null');
+  sessionStorage.removeItem('mosaic.oidc.transaction');
+  if(!transaction||!returnedState||returnedState!==transaction.state)throw new Error('Login state validation failed. Start sign-in again.');
+  const tokens=await tokenRequest({grant_type:'authorization_code',code,redirect_uri:state.auth.redirect_uri,code_verifier:transaction.verifier});
+  if(!tokens.id_token)throw new Error('Identity provider did not return an identity token.');
+  await validateIdToken(tokens.id_token,transaction.nonce);
+  setSession(tokens);
+  return true;
+}
+async function endLogin(){
+  const idToken=state.idToken;clearSession();
+  const url=new URL(state.auth.issuer+'/protocol/openid-connect/logout');
+  url.search=new URLSearchParams({post_logout_redirect_uri:state.auth.redirect_uri,client_id:state.auth.client_id,...(idToken?{id_token_hint:idToken}:{})});
+  location.assign(url);
+}
+function renderAuth(){
+  const action=$('#authAction'),status=$('#authStatus');
+  if(!state.authMode){action.hidden=true;status.hidden=true;return;}
+  action.hidden=false;status.hidden=false;
+  const signedIn=Boolean(state.accessToken);
+  action.textContent=signedIn?'Sign out':'Sign in';
+  status.textContent=signedIn?'Signed in':'Authentication required';
+  $('#loadDemo').hidden=true;$('#newOrg').hidden=!signedIn;const demoLink=document.querySelector('nav a[href="/demo/suppliers"]');if(demoLink)demoLink.hidden=true;
+  action.onclick=()=>signedIn?endLogin():startLogin().catch(e=>toast(e.message));
+}
+async function initAuth(){
+  const response=await fetch('/api/v1/auth/config');
+  const config=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(config.detail||'Could not load authentication settings');
+  if(!config.enabled)return;
+  state.auth=config;state.authMode=true;
+  const stored=JSON.parse(sessionStorage.getItem(tokenStore)||'null');
+  if(stored){state.accessToken=stored.accessToken;state.refreshToken=stored.refreshToken;state.idToken=stored.idToken;state.expiresAt=stored.expiresAt||0;}
+  const callback=await handleOidcCallback();
+  if(!callback&&state.accessToken&&Date.now()>=state.expiresAt-30000){if(state.refreshToken)await refreshSession();else clearSession();}
+  renderAuth();
+  if(!state.accessToken){document.querySelector('main').classList.add('auth-locked');return false;}
+  document.querySelector('main').classList.remove('auth-locked');
+  renderAuth();
+  return true;
+}
 async function api(path,opts={}){
   const headers={'Content-Type':'application/json',...(opts.headers||{})};
+  if(state.authMode){await ensureAccessToken();headers.Authorization='Bearer '+state.accessToken;}
   if(state.org) headers['X-Organisation-ID']=state.org;
-  const response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});
+  let response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});
+  if(response.status===401&&state.authMode&&state.refreshToken){await refreshSession();headers.Authorization='Bearer '+state.accessToken;response=await fetch('/api/v1'+path,{...opts,credentials:'same-origin',headers});}
   const data=response.status===204?null:await response.json().catch(()=>({detail:response.statusText}));
   if(!response.ok) throw new Error(data?.detail||'Request failed ('+response.status+')');
   return data;
@@ -118,4 +220,11 @@ document.addEventListener('click',async event=>{
   }catch(error){toast(error.message);}
   finally{button.disabled=false;}
 });
-loadOrgs().then(refresh).catch(error=>toast('Workspace could not load: '+error.message));
+(async()=>{
+  try{
+    const authenticated=await initAuth();
+    if(state.authMode&&!authenticated){toast('Sign in to access your MOSAIC workspaces.');return;}
+    renderAuth();
+    await loadOrgs();await refresh();
+  }catch(error){renderAuth();toast('Authentication/workspace error: '+error.message);}
+})();

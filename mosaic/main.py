@@ -217,6 +217,24 @@ def health_ready(db: Session = Depends(get_db)):
     return {"status": "ready", "database": "connected"}
 
 
+@app.get("/api/v1/auth/config")
+def browser_auth_config(request: Request):
+    """Expose public OIDC client settings; never expose a client secret."""
+    if not oidc_enabled():
+        return {"enabled": False}
+    client_id = os.getenv("OIDC_CLIENT_ID")
+    if not client_id:
+        raise HTTPException(503, "OIDC_CLIENT_ID is required for browser login")
+    issuer = os.getenv("OIDC_ISSUER", "").rstrip("/")
+    return {
+        "enabled": True,
+        "issuer": issuer,
+        "client_id": client_id,
+        "redirect_uri": os.getenv("OIDC_REDIRECT_URI") or str(request.base_url).rstrip("/") + "/",
+        "scopes": ["openid", "profile", "email"],
+    }
+
+
 @app.get("/api/v1/platform")
 def platform():
     return {
