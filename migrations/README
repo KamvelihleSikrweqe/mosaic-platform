@@ -1,0 +1,1 @@
+MOSAIC database migrations are managed with Alembic. Create a new revision with `alembic revision --autogenerate -m "description"`, inspect the generated operations, and commit the revision. The baseline revision adopts existing preview schemas idempotently; future revisions must use explicit operations and must never rely on create_all.
