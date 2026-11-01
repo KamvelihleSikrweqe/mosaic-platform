@@ -18,4 +18,5 @@ document.addEventListener('click',async e=>{
  }catch(err){toast(err.message)}
 });
 
-\n$('#loadDemo').onclick=async()=>{const button=$('#loadDemo');button.disabled=true;button.textContent='Loading demo…';try{const result=await api('/demo/supplier-onboarding',{method:'POST',auth:true});state.org=result.organisation.id;await loadOrgs();$('#orgSelect').value=state.org;await refresh();toast('Demo project loaded: '+result.records_created+' sample records added.')}catch(err){toast(err.message)}finally{button.disabled=false;button.textContent='Load supplier demo'}};\n
+
+$('#loadDemo').onclick=async()=>{const button=$('#loadDemo');button.disabled=true;button.textContent='Loading demo…';try{const result=await api('/demo/supplier-onboarding',{method:'POST',auth:true});state.org=result.organisation.id;await loadOrgs();$('#orgSelect').value=state.org;await refresh();toast('Demo project loaded: '+result.records_created+' sample records added.')}catch(err){toast(err.message)}finally{button.disabled=false;button.textContent='Load supplier demo'}};
