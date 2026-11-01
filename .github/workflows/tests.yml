@@ -15,3 +15,8 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
       - run: pytest -q
+
+      - name: Check browser JavaScript syntax
+        run: node --check static/app.js
+      - name: Validate Keycloak realm JSON
+        run: python -m json.tool keycloak/realm-mosaic.json > /dev/null
