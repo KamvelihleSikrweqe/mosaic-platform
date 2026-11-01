@@ -9,20 +9,24 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
-        "organisation_memberships",
-        sa.Column("id", sa.String(length=36), primary_key=True),
-        sa.Column("org_id", sa.String(length=36), sa.ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("user_id", sa.String(length=64), nullable=False),
-        sa.Column("issuer", sa.String(length=500), nullable=False),
-        sa.Column("subject", sa.String(length=500), nullable=False),
-        sa.Column("email", sa.String(length=320), nullable=True),
-        sa.Column("role", sa.String(length=30), nullable=False, server_default="member"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.UniqueConstraint("org_id", "user_id", name="uq_membership_org_user"),
-    )
-    op.create_index("ix_membership_user_id", "organisation_memberships", ["user_id"])
-    op.create_index("ix_membership_org_id", "organisation_memberships", ["org_id"])
+    if "organisation_memberships" not in sa.inspect(op.get_bind()).get_table_names():
+        op.create_table(
+            "organisation_memberships",
+            sa.Column("id", sa.String(length=36), primary_key=True),
+            sa.Column("org_id", sa.String(length=36), sa.ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False),
+            sa.Column("user_id", sa.String(length=64), nullable=False),
+            sa.Column("issuer", sa.String(length=500), nullable=False),
+            sa.Column("subject", sa.String(length=500), nullable=False),
+            sa.Column("email", sa.String(length=320), nullable=True),
+            sa.Column("role", sa.String(length=30), nullable=False, server_default="member"),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+            sa.UniqueConstraint("org_id", "user_id", name="uq_membership_org_user"),
+        )
+    existing_indexes = {item["name"] for item in sa.inspect(op.get_bind()).get_indexes("organisation_memberships")}
+    if "ix_membership_user_id" not in existing_indexes:
+        op.create_index("ix_membership_user_id", "organisation_memberships", ["user_id"])
+    if "ix_membership_org_id" not in existing_indexes:
+        op.create_index("ix_membership_org_id", "organisation_memberships", ["org_id"])
 
     if op.get_bind().dialect.name != "postgresql":
         return
