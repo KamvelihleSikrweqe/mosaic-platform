@@ -20,6 +20,10 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+      - name: Smoke-test database migrations
+        env:
+          DATABASE_URL: sqlite:///./migration_smoke.db
+        run: alembic upgrade head
       - name: Run tests
         env:
           MOSAIC_PREVIEW_USERNAME: owner
