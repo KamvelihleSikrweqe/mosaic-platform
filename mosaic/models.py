@@ -71,3 +71,16 @@ class AuditEvent(Base):
     resource_id: Mapped[str] = mapped_column(String(36), nullable=False)
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class OrganisationMembership(Base):
+    __tablename__ = "organisation_memberships"
+    __table_args__ = (UniqueConstraint("org_id", "user_id", name="uq_membership_org_user"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organisations.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    issuer: Mapped[str] = mapped_column(String(500), nullable=False)
+    subject: Mapped[str] = mapped_column(String(500), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    role: Mapped[str] = mapped_column(String(30), nullable=False, default="member")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
