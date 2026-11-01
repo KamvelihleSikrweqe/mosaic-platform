@@ -188,3 +188,66 @@ def test_oidc_principal_owns_only_its_organisation():
         assert client.get("/api/v1/me", headers=H).json()["organisations"] == []
     finally:
         app.dependency_overrides.clear()
+
+
+def test_verified_single_use_organisation_invitation_and_membership_lifecycle():
+    owner = Principal(
+        user_id="c" * 64, issuer="https://identity.example", subject="owner-invite",
+        email="owner@example.test", email_verified=True,
+    )
+    app.dependency_overrides[get_current_principal] = lambda: owner
+    try:
+        created = client.post(
+            "/api/v1/organisations",
+            json={"name": "Invitation Workspace", "slug": "invite-" + uuid4().hex[:8]},
+            headers=H,
+        )
+        assert created.status_code == 201, created.text
+        org_id = created.json()["id"]
+        invitation = client.post(
+            f"/api/v1/organisations/{org_id}/invitations",
+            json={"email": "new.member@example.test", "role": "builder"},
+            headers=H,
+        )
+        assert invitation.status_code == 201, invitation.text
+        token = invitation.json()["acceptance_token"]
+        assert token and token not in invitation.text.split('"token_hash"')[-1]
+
+        unverified = Principal(
+            user_id="d" * 64, issuer="https://identity.example", subject="new-member",
+            email="new.member@example.test", email_verified=False,
+        )
+        app.dependency_overrides[get_current_principal] = lambda: unverified
+        assert client.post("/api/v1/invitations/accept", json={"token": token}, headers=H).status_code == 403
+
+        wrong_email = Principal(
+            user_id="e" * 64, issuer="https://identity.example", subject="wrong-email",
+            email="other@example.test", email_verified=True,
+        )
+        app.dependency_overrides[get_current_principal] = lambda: wrong_email
+        assert client.post("/api/v1/invitations/accept", json={"token": token}, headers=H).status_code == 403
+
+        member = Principal(
+            user_id="f" * 64, issuer="https://identity.example", subject="new-member",
+            email="NEW.MEMBER@example.test", email_verified=True,
+        )
+        app.dependency_overrides[get_current_principal] = lambda: member
+        accepted = client.post("/api/v1/invitations/accept", json={"token": token}, headers=H)
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["role"] == "builder"
+        assert client.post("/api/v1/invitations/accept", json={"token": token}, headers=H).status_code == 410
+
+        app.dependency_overrides[get_current_principal] = lambda: owner
+        members = client.get(f"/api/v1/organisations/{org_id}/members", headers=H)
+        assert members.status_code == 200
+        assert {item["role"] for item in members.json()} == {"owner", "builder"}
+        assert client.patch(
+            f"/api/v1/organisations/{org_id}/members/{member.user_id}",
+            json={"role": "operator"}, headers=H,
+        ).json()["role"] == "operator"
+        assert client.delete(
+            f"/api/v1/organisations/{org_id}/members/{member.user_id}", headers=H
+        ).status_code == 204
+        assert len(client.get(f"/api/v1/organisations/{org_id}/members", headers=H).json()) == 1
+    finally:
+        app.dependency_overrides.clear()
