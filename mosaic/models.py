@@ -1,9 +1,14 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, DateTime, ForeignKey, JSON, Boolean, UniqueConstraint
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
+
 from .db import Base
 
-def now(): return datetime.now(timezone.utc)
+
+def now():
+    return datetime.now(timezone.utc)
+
 
 class Organisation(Base):
     __tablename__ = "organisations"
@@ -11,6 +16,7 @@ class Organisation(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     slug: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
 
 class DataObject(Base):
     __tablename__ = "data_objects"
@@ -21,6 +27,17 @@ class DataObject(Base):
     label: Mapped[str] = mapped_column(String(160), nullable=False)
     schema_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class DataRecord(Base):
+    __tablename__ = "data_records"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
+    object_id: Mapped[str] = mapped_column(ForeignKey("data_objects.id"), index=True)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
 
 class Application(Base):
     __tablename__ = "applications"
@@ -33,6 +50,7 @@ class Application(Base):
     version: Mapped[int] = mapped_column(default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
+
 class Workflow(Base):
     __tablename__ = "workflows"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -41,6 +59,7 @@ class Workflow(Base):
     definition: Mapped[dict] = mapped_column(JSON, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
 
 class AuditEvent(Base):
     __tablename__ = "audit_events"
