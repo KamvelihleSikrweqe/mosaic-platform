@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .auth import Principal, get_current_principal, oidc_enabled
-from .models import Application, AuditEvent, DataObject, DataRecord, Organisation, OrganisationMembership, OrganisationInvitation, Workflow
+from .models import Application, AuditEvent, DataObject, DataRecord, Organisation, OrganisationMembership, OrganisationInvitation, Workflow, WorkflowRun
 
 app = FastAPI(
     title="MOSAIC Platform",
@@ -111,6 +111,16 @@ class AppIn(BaseModel):
 class WorkflowIn(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     definition: dict = Field(default_factory=dict)
+
+
+class WorkflowRunIn(BaseModel):
+    input: dict = Field(default_factory=dict)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class WorkflowApprovalIn(BaseModel):
+    approved: bool
+    comment: str = Field(default="", max_length=2000)
 
 
 class RecordIn(BaseModel):
@@ -809,17 +819,61 @@ def publish_app(app_id: str, org: Organisation = Depends(org_scope), db: Session
     return {"id": item.id, "status": item.status, "version": item.version}
 
 
+def validate_workflow_definition(definition: dict):
+    steps = definition.get("steps", [])
+    if not isinstance(steps, list) or len(steps) > 50:
+        raise HTTPException(422, "Workflow must contain a steps array with at most 50 steps")
+    for index, step in enumerate(steps, start=1):
+        if not isinstance(step, dict) or step.get("type") not in {"manual_approval", "log"}:
+            raise HTTPException(422, f"Unsupported step at position {index}. Supported steps: log, manual_approval")
+        if step["type"] == "log":
+            message = step.get("message", "")
+            if not isinstance(message, str) or len(message) > 2000:
+                raise HTTPException(422, f"Log step {index} requires a message of at most 2000 characters")
+        if step["type"] == "manual_approval":
+            label = step.get("label", "Approval required")
+            if not isinstance(label, str) or len(label) > 200:
+                raise HTTPException(422, f"Approval step {index} label must be at most 200 characters")
+    return steps
+
+
+def advance_workflow_run(db: Session, org_id: str, workflow: Workflow, run: WorkflowRun):
+    steps = workflow.definition.get("steps", [])
+    while run.current_step < len(steps):
+        index = run.current_step
+        step = steps[index]
+        if step["type"] == "log":
+            results = list(run.step_results or [])
+            results.append({
+                "step": index, "type": "log", "status": "completed",
+                "message": step.get("message", ""), "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            run.step_results = results
+            run.current_step += 1
+            continue
+        if step["type"] == "manual_approval":
+            run.status = "waiting_approval"
+            results = list(run.step_results or [])
+            results.append({
+                "step": index, "type": "manual_approval", "status": "waiting",
+                "label": step.get("label", "Approval required"),
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+            })
+            run.step_results = results
+            audit(db, org_id, "workflow_run.waiting_approval", "workflow_run", run.id, {"step": index})
+            return
+        run.status = "failed"
+        run.error = f"Unsupported step type at position {index + 1}"
+        return
+    run.status = "succeeded"
+    audit(db, org_id, "workflow_run.succeeded", "workflow_run", run.id, {"steps": len(steps)})
+
+
 @app.post("/api/v1/workflows", dependencies=[Depends(require_token)], status_code=201)
 def create_workflow(
     payload: WorkflowIn, org: Organisation = Depends(org_scope), db: Session = Depends(get_db)
 ):
-    steps = payload.definition.get("steps", [])
-    if not isinstance(steps, list) or len(steps) > 50:
-        raise HTTPException(422, "Workflow must contain a steps array with at most 50 steps")
-    allowed = {"manual_approval", "log", "http_request_placeholder"}
-    for step in steps:
-        if not isinstance(step, dict) or step.get("type") not in allowed:
-            raise HTTPException(422, f"Unsupported step type. Allowed: {', '.join(sorted(allowed))}")
+    steps = validate_workflow_definition(payload.definition)
     wf = Workflow(
         id=str(uuid4()), org_id=org.id, name=payload.name,
         definition=payload.definition, enabled=False,
@@ -849,10 +903,124 @@ def enable_workflow(
     wf = db.scalar(select(Workflow).where(Workflow.id == workflow_id, Workflow.org_id == org.id))
     if not wf:
         raise HTTPException(404, "Workflow not found")
+    validate_workflow_definition(wf.definition)
     wf.enabled = True
     audit(db, org.id, "workflow.enabled", "workflow", wf.id)
     db.commit()
     return {"id": wf.id, "enabled": True}
+
+
+@app.post("/api/v1/workflows/{workflow_id}/runs", dependencies=[Depends(require_token)], status_code=201)
+def start_workflow_run(
+    workflow_id: str, payload: WorkflowRunIn,
+    org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    workflow = db.scalar(select(Workflow).where(
+        Workflow.id == workflow_id, Workflow.org_id == org.id
+    ))
+    if not workflow:
+        raise HTTPException(404, "Workflow not found")
+    if not workflow.enabled:
+        raise HTTPException(409, "Enable the workflow before starting a run")
+    steps = validate_workflow_definition(workflow.definition)
+    if payload.idempotency_key:
+        existing = db.scalar(select(WorkflowRun).where(
+            WorkflowRun.org_id == org.id,
+            WorkflowRun.idempotency_key == payload.idempotency_key,
+        ))
+        if existing:
+            if existing.workflow_id != workflow.id:
+                raise HTTPException(409, "Idempotency key was already used for another workflow")
+            return workflow_run_response(existing)
+    run = WorkflowRun(
+        id=str(uuid4()), org_id=org.id, workflow_id=workflow.id,
+        status="running", input=payload.input, step_results=[],
+        current_step=0, idempotency_key=payload.idempotency_key,
+    )
+    db.add(run)
+    db.flush()
+    audit(db, org.id, "workflow_run.started", "workflow_run", run.id, {"workflow_id": workflow.id})
+    advance_workflow_run(db, org.id, workflow, run)
+    db.commit()
+    db.refresh(run)
+    return workflow_run_response(run)
+
+
+def workflow_run_response(run: WorkflowRun):
+    return {
+        "id": run.id, "workflow_id": run.workflow_id, "status": run.status,
+        "input": run.input, "current_step": run.current_step,
+        "step_results": run.step_results, "error": run.error,
+        "created_at": run.created_at, "updated_at": run.updated_at,
+    }
+
+
+@app.get("/api/v1/workflows/{workflow_id}/runs", dependencies=[Depends(require_token)])
+def list_workflow_runs(
+    workflow_id: str, limit: int = 50, offset: int = 0,
+    org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    if not db.scalar(select(Workflow.id).where(Workflow.id == workflow_id, Workflow.org_id == org.id)):
+        raise HTTPException(404, "Workflow not found")
+    if limit < 1 or limit > 100 or offset < 0:
+        raise HTTPException(422, "limit must be 1-100 and offset must be non-negative")
+    runs = db.scalars(select(WorkflowRun).where(
+        WorkflowRun.workflow_id == workflow_id, WorkflowRun.org_id == org.id
+    ).order_by(WorkflowRun.created_at.desc()).limit(limit).offset(offset)).all()
+    return [workflow_run_response(run) for run in runs]
+
+
+@app.get("/api/v1/workflow-runs/{run_id}", dependencies=[Depends(require_token)])
+def get_workflow_run(
+    run_id: str, org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    run = db.scalar(select(WorkflowRun).where(
+        WorkflowRun.id == run_id, WorkflowRun.org_id == org.id
+    ))
+    if not run:
+        raise HTTPException(404, "Workflow run not found")
+    return workflow_run_response(run)
+
+
+@app.post("/api/v1/workflow-runs/{run_id}/approval", dependencies=[Depends(require_token)])
+def decide_workflow_approval(
+    run_id: str, payload: WorkflowApprovalIn,
+    org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    run = db.scalar(select(WorkflowRun).where(
+        WorkflowRun.id == run_id, WorkflowRun.org_id == org.id
+    ))
+    if not run:
+        raise HTTPException(404, "Workflow run not found")
+    if run.status != "waiting_approval":
+        raise HTTPException(409, "Workflow run is not waiting for approval")
+    workflow = db.scalar(select(Workflow).where(
+        Workflow.id == run.workflow_id, Workflow.org_id == org.id
+    ))
+    if not workflow:
+        raise HTTPException(404, "Workflow not found")
+    pending = next((item for item in reversed(run.step_results)
+                    if item.get("type") == "manual_approval" and item.get("status") == "waiting"), None)
+    if not pending:
+        raise HTTPException(409, "No pending approval step exists")
+    results = [dict(item) for item in (run.step_results or [])]
+    pending = next(item for item in reversed(results)
+                   if item.get("type") == "manual_approval" and item.get("status") == "waiting")
+    pending["status"] = "approved" if payload.approved else "rejected"
+    pending["comment"] = payload.comment
+    pending["decided_at"] = datetime.now(timezone.utc).isoformat()
+    run.step_results = results
+    if payload.approved:
+        run.current_step += 1
+        run.status = "running"
+        advance_workflow_run(db, org.id, workflow, run)
+    else:
+        run.status = "failed"
+        run.error = "Workflow stopped because an approval was rejected"
+        audit(db, org.id, "workflow_run.rejected", "workflow_run", run.id, {"step": pending["step"]})
+    db.commit()
+    db.refresh(run)
+    return workflow_run_response(run)
 
 
 @app.get("/api/v1/audit", dependencies=[Depends(require_token)])
