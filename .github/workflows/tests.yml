@@ -14,6 +14,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
+      - name: Install MOSAIC developer package
+        run: pip install .
+      - name: Smoke-test MOSAIC CLI
+        run: mosaic --help
       - run: pytest -q
 
       - name: Check browser JavaScript syntax
