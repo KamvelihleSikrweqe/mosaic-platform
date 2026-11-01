@@ -904,6 +904,7 @@ def application_preview(app_id: str):
 @app.get("/api/v1/apps/{app_id}/runtime", dependencies=[Depends(require_token)])
 def get_application_runtime(
     app_id: str,
+    preview: bool = False,
     org: Organisation = Depends(org_scope),
     db: Session = Depends(get_db),
 ):
@@ -912,7 +913,20 @@ def get_application_runtime(
     ))
     if not item:
         raise HTTPException(404, "Application not found")
-    config = item.config if isinstance(item.config, dict) else {}
+    production_release = None if preview else db.scalar(
+        select(ApplicationRelease).where(
+            ApplicationRelease.app_id == app_id,
+            ApplicationRelease.org_id == org.id,
+            ApplicationRelease.environment == "production",
+            ApplicationRelease.status == "ready",
+        ).order_by(ApplicationRelease.version.desc())
+    )
+    config = (
+        production_release.manifest if production_release
+        else item.config if isinstance(item.config, dict) else {}
+    )
+    runtime_status = "published" if production_release else item.status
+    runtime_version = production_release.version if production_release else item.version
     objects = db.scalars(
         select(DataObject).where(DataObject.org_id == org.id)
     ).all()
@@ -929,7 +943,7 @@ def get_application_runtime(
             raise HTTPException(422, "Unsupported application page. Supported types: dashboard, data-list, data-form")
     return {
         "id": item.id, "name": item.name, "description": item.description,
-        "status": item.status, "version": item.version,
+        "status": runtime_status, "version": runtime_version,
         "navigation": config.get("navigation", []),
         "pages": pages,
         "objects": object_index,
@@ -958,6 +972,7 @@ def update_app(
         raise HTTPException(409, "Application version changed. Reload before saving.")
     validate_application_manifest(payload.config, org.id, db)
     item.config = payload.config
+    item.status = "draft"
     if payload.name is not None:
         item.name = payload.name
     if payload.description is not None:
