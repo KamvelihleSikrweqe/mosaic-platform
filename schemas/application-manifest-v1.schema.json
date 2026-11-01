@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mosaic-platform.dev/schemas/application-manifest-v1.schema.json",
+  "title": "MOSAIC Application Manifest v1",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "navigation": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "string",
+        "maxLength": 100
+      }
+    },
+    "pages": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "type": {
+            "enum": [
+              "dashboard",
+              "data-list",
+              "data-form"
+            ]
+          },
+          "dataSource": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,99}$"
+          },
+          "components": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "type": {
+                  "enum": [
+                    "heading",
+                    "text",
+                    "metric",
+                    "data-table",
+                    "data-form",
+                    "button"
+                  ]
+                },
+                "props": {
+                  "type": "object",
+                  "maxProperties": 40
+                },
+                "binding": {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{1,99}$"
+                    },
+                    "field": {
+                      "type": "string",
+                      "maxLength": 100
+                    }
+                  },
+                  "required": [
+                    "object"
+                  ],
+                  "additionalProperties": false
+                },
+                "action": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "workflow.run"
+                    },
+                    "workflowId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 36
+                    },
+                    "input": {
+                      "type": "object",
+                      "maxProperties": 30
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "workflowId"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
