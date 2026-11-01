@@ -136,7 +136,7 @@ async function refresh(){
   $('#publishedCount').textContent=apps.filter(a=>a.status==='published').length;
   $('#objectList').innerHTML=objects.slice(0,5).map(o=>'<div class="item"><b>'+esc(o.label)+'</b><span class="tag">'+esc(o.key)+'</span></div>').join('')||'<small class="muted">No data models yet.</small>';
   $('#appList').innerHTML=apps.slice(0,5).map(a=>'<div class="item"><span><b>'+esc(a.name)+'</b><small class="tag"> '+esc(a.status)+' · v'+esc(a.version)+'</small></span>'+(a.status==='published'?'':'<button type="button" class="mini-action" data-publish="'+esc(a.id)+'">Publish metadata</button>')+'</div>').join('')||'<small class="muted">No applications yet.</small>';
-  $('#workflowList').innerHTML=workflows.slice(0,5).map(w=>'<div class="item"><span><b>'+esc(w.name)+'</b><small class="tag"> '+(w.enabled?'ENABLED':'DRAFT')+'</small></span>'+(w.enabled?'':'<button type="button" class="mini-action" data-enable="'+esc(w.id)+'">Enable definition</button>')+'</div>').join('')||'<small class="muted">No workflows yet.</small>';
+  $('#workflowList').innerHTML=workflows.slice(0,5).map(w=>'<div class="item workflow-item"><span><b>'+esc(w.name)+'</b><small class="tag"> '+(w.enabled?'ENABLED':'DRAFT')+' · '+(w.definition?.steps?.length||0)+' steps</small></span><span class="workflow-actions">'+(w.enabled?'<button type="button" class="mini-action" data-run="'+esc(w.id)+'">Run</button>':'<button type="button" class="mini-action" data-enable="'+esc(w.id)+'">Enable</button>')+'<button type="button" class="mini-action" data-history="'+esc(w.id)+'">Runs</button></span></div>').join('')||'<small class="muted">No workflows yet.</small>';
   const groups=await Promise.all(objects.map(async object=>({object,records:await api('/objects/'+encodeURIComponent(object.id)+'/records')})));
   const rows=groups.flatMap(({object,records})=>records.map(record=>({object,record})));
   $('#recordCount').textContent=rows.length+' RECORD'+(rows.length===1?'':'S');
@@ -147,6 +147,34 @@ async function refresh(){
   }).join('')+'</tbody></table></div>':'<div class="empty-state">No business records in this workspace yet. Select <b>Load supplier demo</b> to create a working sample dataset.</div>';
   $('#auditList').innerHTML=audit.length?audit.slice(0,10).map(event=>'<div class="audit-row"><span><b>'+esc(event.action)+'</b> · '+esc(event.resource_type)+'</span><time>'+new Date(event.created_at).toLocaleString()+'</time></div>').join(''):'No activity yet.';
 }
+async function showWorkflowRuns(workflowId){
+  const panel=$('#workflowRuns');panel.innerHTML='<div class="item"><small class="muted">Loading workflow runs…</small></div>';
+  try{
+    const runs=await api('/workflows/'+encodeURIComponent(workflowId)+'/runs');
+    if(!runs.length){panel.innerHTML='<div class="item"><small class="muted">No runs yet for this workflow.</small></div>';return;}
+    panel.innerHTML='<div class="workflow-run-heading">RECENT EXECUTIONS</div>'+runs.map(run=>{
+      const steps=(run.step_results||[]).map(step=>'<div class="workflow-step"><span>'+esc(step.type.replaceAll('_',' '))+' · '+esc(step.status)+'</span>'+(step.label?'<small>'+esc(step.label)+'</small>':'')+(step.message?'<small>'+esc(step.message)+'</small>':'')+(step.comment?'<small>Comment: '+esc(step.comment)+'</small>':'')+'</div>').join('');
+      const actions=run.status==='waiting_approval'?'<div class="workflow-actions"><button class="mini-action" data-approval="approve" data-run-id="'+esc(run.id)+'">Approve</button><button class="mini-action" data-approval="reject" data-run-id="'+esc(run.id)+'">Reject</button></div>':'';
+      return '<article class="workflow-run"><div class="workflow-run-top"><b>'+esc(run.id.slice(0,8))+'</b><span class="tag">'+esc(run.status.replaceAll('_',' ').toUpperCase())+'</span></div><small class="muted">'+new Date(run.created_at).toLocaleString()+'</small>'+steps+ (run.error?'<p class="workflow-error">'+esc(run.error)+'</p>':'')+actions+'</article>';
+    }).join('');
+  }catch(error){panel.textContent=error.message;}
+}
+async function startWorkflowRun(workflowId){
+  let input={};
+  const raw=window.prompt('Workflow input as JSON', '{}');
+  if(raw===null)return;
+  try{input=JSON.parse(raw);if(!input||Array.isArray(input)||typeof input!=='object')throw Error('Input must be a JSON object.');}
+  catch(error){toast('Invalid workflow input: '+error.message);return;}
+  const run=await api('/workflows/'+encodeURIComponent(workflowId)+'/runs',{method:'POST',body:JSON.stringify({input,idempotency_key:crypto.randomUUID()})});
+  toast('Workflow run '+run.status.replaceAll('_',' ')+'.');
+  await showWorkflowRuns(workflowId);
+}
+async function decideApproval(runId,approved){
+  const comment=window.prompt(approved?'Approval comment (optional)':'Reason for rejection (optional)','')||'';
+  await api('/workflow-runs/'+encodeURIComponent(runId)+'/approval',{method:'POST',body:JSON.stringify({approved,comment})});
+  toast(approved?'Approval recorded; workflow resumed.':'Approval rejected; workflow stopped.');
+  await refresh();
+}
 function field(label,name,placeholder='',value=''){return '<label>'+label+'<input name="'+name+'" placeholder="'+esc(placeholder)+'" value="'+esc(value)+'" required></label>';}
 function openModal(kind){
   if(kind!=='org'&&!state.org){toast('Create or select an organisation first.');return;}
@@ -154,7 +182,7 @@ function openModal(kind){
     org:{title:'Create organisation',fields:field('Organisation name','name','e.g. Acme Financial')+field('Unique workspace slug','slug','acme-financial'),save:'Create organisation'},
     object:{title:'Create data model',fields:field('Display name','label','Supplier')+field('Object key','key','supplier')+'<label>JSON Schema <span class="hint">Define fields for this business object.</span><textarea name="schema" required>{"type":"object","properties":{"name":{"type":"string"},"email":{"type":"string","format":"email"}}}</textarea></label>',save:'Create data model'},
     app:{title:'Create application',fields:field('Application name','name','Supplier Portal')+'<label>Description<textarea name="description" placeholder="What will this application do?"></textarea></label><label>Application configuration <span class="hint">JSON metadata; this preview does not render or deploy an app.</span><textarea name="config" required>{"navigation":[],"pages":[]}</textarea></label>',save:'Create application'},
-    workflow:{title:'Create workflow',fields:field('Workflow name','name','Supplier approval')+'<label>Workflow definition <span class="hint">Definitions are stored, not executed, in this preview.</span><textarea name="definition" required>{"steps":[{"type":"manual_approval","label":"Review request"},{"type":"log","message":"Approved"}]}</textarea></label>',save:'Create workflow'}
+    workflow:{title:'Create workflow',fields:field('Workflow name','name','Supplier approval')+'<label>Workflow definition <span class="hint">Supported steps: log and manual_approval. Runs pause for a human decision and continue after approval.</span><textarea name="definition" required>{"steps":[{"type":"manual_approval","label":"Review request"},{"type":"log","message":"Approved"}]}</textarea></label>',save:'Create workflow'}
   };
   const config=configs[kind];$('#modalTitle').textContent=config.title;$('#fields').innerHTML=config.fields;
   $('#save').textContent=config.save;$('#modalForm').dataset.kind=kind;$('#modalForm').dataset.saveLabel=config.save;
@@ -210,15 +238,18 @@ $('#loadDemo').addEventListener('click',async()=>{
   finally{button.disabled=false;button.textContent='Load supplier demo';}
 });
 document.addEventListener('click',async event=>{
-  const publish=event.target.closest('[data-publish]'),enable=event.target.closest('[data-enable]');
-  if(!publish&&!enable)return;
-  const button=publish||enable;button.disabled=true;
+  const publish=event.target.closest('[data-publish]'),enable=event.target.closest('[data-enable]'),run=event.target.closest('[data-run]'),history=event.target.closest('[data-history]'),approval=event.target.closest('[data-approval]');
+  if(!publish&&!enable&&!run&&!history&&!approval)return;
+  const button=publish||enable||run||history||approval;if(button)button.disabled=true;
   try{
     if(publish){await api('/apps/'+encodeURIComponent(publish.dataset.publish)+'/publish',{method:'POST'});toast('Application metadata published.');}
-    if(enable){await api('/workflows/'+encodeURIComponent(enable.dataset.enable)+'/enable',{method:'POST'});toast('Workflow definition enabled. It is not yet executing.');}
-    await refresh();
+    if(enable){await api('/workflows/'+encodeURIComponent(enable.dataset.enable)+'/enable',{method:'POST'});toast('Workflow enabled and ready to run.');}
+    if(run)await startWorkflowRun(run.dataset.run);
+    if(history)await showWorkflowRuns(history.dataset.history);
+    if(approval){const runId=approval.dataset.runId;await decideApproval(runId,approval.dataset.approval==='approve');}
+    if(publish||enable||approval)await refresh();
   }catch(error){toast(error.message);}
-  finally{button.disabled=false;}
+  finally{if(button)button.disabled=false;}
 });
 (async()=>{
   try{
