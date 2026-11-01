@@ -1,8 +1,11 @@
 import os
+import base64
+import binascii
+import hmac
 from pathlib import Path
 from uuid import uuid4
 from fastapi import FastAPI, Depends, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -14,7 +17,40 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title="MOSAIC Platform", version="0.1.0", description="Programmable business infrastructure — developer preview")
 ROOT = Path(__file__).resolve().parent.parent
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
-DEMO_TOKEN = os.getenv("MOSAIC_DEMO_TOKEN", "mosaic-local-demo")
+@app.middleware("http")
+async def preview_basic_auth(request, call_next):
+    # Single-operator preview gate. This is not multi-user identity or tenant authorisation.
+    if request.url.path == "/health":
+        return await call_next(request)
+    expected_password = os.getenv("MOSAIC_PREVIEW_PASSWORD")
+    expected_username = os.getenv("MOSAIC_PREVIEW_USERNAME", "owner")
+    if not expected_password:
+        return JSONResponse({"detail": "Preview authentication is not configured"}, status_code=503)
+    auth = request.headers.get("authorization", "")
+    scheme, _, encoded = auth.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return JSONResponse(
+            {"detail": "Authentication required"},
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="MOSAIC preview", charset="UTF-8"'},
+        )
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+        username, separator, password = decoded.partition(":")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        separator, username, password = "", "", ""
+    valid = (
+        bool(separator)
+        and hmac.compare_digest(username, expected_username)
+        and hmac.compare_digest(password, expected_password)
+    )
+    if not valid:
+        return JSONResponse(
+            {"detail": "Invalid credentials"},
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="MOSAIC preview", charset="UTF-8"'},
+        )
+    return await call_next(request)
 
 class OrgIn(BaseModel):
     name: str = Field(min_length=2, max_length=160)
@@ -34,16 +70,12 @@ class WorkflowIn(BaseModel):
     name: str
     definition: dict = Field(default_factory=dict)
 
-def require_token(authorization: str | None = Header(default=None)):
-    # Deliberately simple local-preview gate. Replace with OIDC/Keycloak before any shared deployment.
-    if os.getenv("MOSAIC_ALLOW_INSECURE_DEMO", "true").lower() != "true":
-        if authorization != f"Bearer {DEMO_TOKEN}":
-            raise HTTPException(401, "Valid bearer token required")
-    elif authorization and authorization != f"Bearer {DEMO_TOKEN}":
-        raise HTTPException(401, "Invalid demo token")
+def require_token():
+    # Authentication is enforced globally by preview_basic_auth middleware.
+    return None
 
 def org_scope(x_org_id: str = Header(..., alias="X-Organisation-ID"), db: Session = Depends(get_db)):
-    # Demo-only selector. This is NOT an authenticated tenant membership check.
+    # Workspace selector for the single-operator preview; not suitable for multi-user tenancy.
     org = db.get(Organisation, x_org_id)
     if not org:
         raise HTTPException(404, "Organisation not found")
