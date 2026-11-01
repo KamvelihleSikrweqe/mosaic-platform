@@ -126,6 +126,25 @@
       '</p><button class="primary" type="button" data-new-record="' + escapeHtml(object.key) +
       '">＋ Create ' + escapeHtml(object.label) + '</button><div class="form-page-note">Your entries are validated against the data model schema and stored in this organisation.</div></section>';
   };
+  const renderComponent = async (component, page) => {
+    const props = component.props || {};
+    const binding = component.binding || {};
+    const object = state.app.objects[binding.object] || objectFor(page);
+    if (component.type === "heading") return '<section class="welcome-panel"><h2>' + escapeHtml(props.text || "Section heading") + '</h2></section>';
+    if (component.type === "text") return '<section class="welcome-panel"><p>' + escapeHtml(props.text || "") + '</p></section>';
+    if (component.type === "metric") {
+      const rows = await loadRecords(object);
+      return '<article class="metric-card"><span>' + escapeHtml(props.label || object?.label || "Records") + '</span><strong>' + rows.length + '</strong><small>Business records</small></article>';
+    }
+    if (component.type === "data-table") return renderDataList({...page, type:"data-list", dataSource:binding.object || page.dataSource, name:props.title || page.name});
+    if (component.type === "data-form") return renderDataForm({...page, type:"data-form", dataSource:binding.object || page.dataSource, name:props.title || page.name});
+    if (component.type === "button") {
+      return '<section class="welcome-panel"><button class="primary" type="button" data-workflow-run="' +
+        escapeHtml(component.action?.workflowId || "") + '" ' + (!component.action?.workflowId ? "disabled" : "") +
+        '>' + escapeHtml(props.label || "Run workflow") + '</button></section>';
+    }
+    return '<div class="empty-state">Unsupported component.</div>';
+  };
   const renderPage = async () => {
     const page = pageList()[state.activePage] || pageList()[0];
     $("#runtimePageTitle").textContent = page.name || "Application";
@@ -133,7 +152,10 @@
     const content = $("#runtimeContent");
     content.innerHTML = '<div class="loading">Loading page…</div>';
     try {
-      if (page.type === "dashboard") content.innerHTML = await renderDashboard();
+      if (Array.isArray(page.components) && page.components.length) {
+        const blocks = await Promise.all(page.components.map(component => renderComponent(component, page)));
+        content.innerHTML = '<div class="runtime-components">' + blocks.join("") + '</div>';
+      } else if (page.type === "dashboard") content.innerHTML = await renderDashboard();
       else if (page.type === "data-list") content.innerHTML = await renderDataList(page);
       else if (page.type === "data-form") content.innerHTML = renderDataForm(page);
       else content.innerHTML = '<div class="empty-state">This page type is not supported by the current runtime.</div>';
@@ -190,6 +212,20 @@
     await renderPage();
   };
   document.addEventListener("click", async (event) => {
+    const workflowButton = event.target.closest("[data-workflow-run]");
+    if (workflowButton) {
+      const workflowId = workflowButton.dataset.workflowRun;
+      if (!workflowId) return;
+      workflowButton.disabled = true;
+      try {
+        const run = await api("/workflows/" + encodeURIComponent(workflowId) + "/runs", {
+          method: "POST", body: JSON.stringify({input:{source:"application", application_id:state.app.id}, idempotency_key:crypto.randomUUID()})
+        });
+        toast("Workflow started: " + run.status.replaceAll("_", " "));
+      } catch (error) { toast(error.message); }
+      finally { workflowButton.disabled = false; }
+      return;
+    }
     const page = event.target.closest("[data-page]");
     if (page) { state.activePage = Number(page.dataset.page); await renderPage(); return; }
     const create = event.target.closest("[data-new-record]");
