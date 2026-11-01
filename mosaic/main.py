@@ -839,9 +839,6 @@ def get_application_runtime(
             "dashboard", "data-list", "data-form"
         }:
             raise HTTPException(422, "Unsupported application page. Supported types: dashboard, data-list, data-form")
-        source = page.get("dataSource")
-        if source and source not in object_index:
-            raise HTTPException(422, f"Application data source '{source}' does not exist in this organisation")
     return {
         "id": item.id, "name": item.name, "description": item.description,
         "status": item.status, "version": item.version,
