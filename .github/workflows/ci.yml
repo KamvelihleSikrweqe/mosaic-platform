@@ -20,6 +20,10 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+      - name: Install MOSAIC developer package
+        run: pip install .
+      - name: Smoke-test MOSAIC CLI
+        run: mosaic --help
       - name: Smoke-test database migrations
         env:
           DATABASE_URL: sqlite:///./migration_smoke.db
