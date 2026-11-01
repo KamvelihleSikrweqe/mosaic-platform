@@ -117,6 +117,10 @@ class RecordIn(BaseModel):
     data: dict
 
 
+class RecordImportIn(BaseModel):
+    rows: list[dict] = Field(min_length=1, max_length=500)
+
+
 def require_token(principal: Principal = Depends(get_current_principal)):
     return principal
 
@@ -683,6 +687,46 @@ def create_record(
     return {
         "id": record.id, "object_id": record.object_id, "data": record.data,
         "created_at": record.created_at, "updated_at": record.updated_at,
+    }
+
+
+@app.post(
+    "/api/v1/objects/{object_id}/records/import",
+    dependencies=[Depends(require_token)],
+    status_code=200,
+)
+def import_records(
+    object_id: str,
+    payload: RecordImportIn,
+    org: Organisation = Depends(org_scope),
+    db: Session = Depends(get_db),
+):
+    """Import up to 500 schema-validated records; valid rows succeed independently."""
+    obj = object_for_org(db, object_id, org.id)
+    imported = []
+    errors = []
+    for row_number, data in enumerate(payload.rows, start=2):
+        try:
+            validate_record(obj.schema_json, data)
+        except HTTPException as exc:
+            errors.append({"row": row_number, "detail": exc.detail})
+            continue
+        record = DataRecord(
+            id=str(uuid4()), org_id=org.id, object_id=obj.id, data=data
+        )
+        db.add(record)
+        db.flush()
+        audit(
+            db, org.id, "record.imported", "data_record", record.id,
+            {"object_key": obj.key, "source": "csv", "row": row_number},
+        )
+        imported.append({"row": row_number, "id": record.id})
+    db.commit()
+    return {
+        "imported": len(imported),
+        "failed": len(errors),
+        "results": imported,
+        "errors": errors,
     }
 
 
