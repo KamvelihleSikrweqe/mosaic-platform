@@ -68,6 +68,93 @@ def test_workflow_definition_validation():
     assert bad.status_code == 422
 
 
+
+def test_workflow_runtime_pauses_for_approval_and_resumes_idempotently():
+    created_org = org("Runtime Org", "runtime-org")
+    assert created_org.status_code == 201
+    headers = {**H, "X-Organisation-ID": created_org.json()["id"]}
+    created = client.post(
+        "/api/v1/workflows",
+        json={"name": "Supplier approval", "definition": {"steps": [
+            {"type": "log", "message": "Supplier submitted"},
+            {"type": "manual_approval", "label": "Procurement review"},
+            {"type": "log", "message": "Supplier approved"},
+        ]}},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    workflow_id = created.json()["id"]
+    assert client.post(
+        f"/api/v1/workflows/{workflow_id}/runs",
+        json={"input": {"supplier_id": "sup-123"}},
+        headers=headers,
+    ).status_code == 409
+    assert client.post(f"/api/v1/workflows/{workflow_id}/enable", headers=headers).json()["enabled"]
+
+    started = client.post(
+        f"/api/v1/workflows/{workflow_id}/runs",
+        json={"input": {"supplier_id": "sup-123"}, "idempotency_key": "supplier-123"},
+        headers=headers,
+    )
+    assert started.status_code == 201, started.text
+    run = started.json()
+    assert run["status"] == "waiting_approval"
+    assert run["current_step"] == 1
+    assert len(run["step_results"]) == 2
+
+    replay = client.post(
+        f"/api/v1/workflows/{workflow_id}/runs",
+        json={"input": {"supplier_id": "sup-123"}, "idempotency_key": "supplier-123"},
+        headers=headers,
+    )
+    assert replay.status_code == 201
+    assert replay.json()["id"] == run["id"]
+
+    approved = client.post(
+        f"/api/v1/workflow-runs/{run['id']}/approval",
+        json={"approved": True, "comment": "Verified supplier documents"},
+        headers=headers,
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "succeeded"
+    assert [item["status"] for item in approved.json()["step_results"]] == [
+        "completed", "approved", "completed"
+    ]
+    assert client.post(
+        f"/api/v1/workflow-runs/{run['id']}/approval",
+        json={"approved": True},
+        headers=headers,
+    ).status_code == 409
+    history = client.get(f"/api/v1/workflows/{workflow_id}/runs", headers=headers)
+    assert history.status_code == 200
+    assert history.json()[0]["id"] == run["id"]
+
+
+def test_workflow_runtime_rejection_stops_run():
+    created_org = org("Reject Org", "reject-org")
+    headers = {**H, "X-Organisation-ID": created_org.json()["id"]}
+    created = client.post(
+        "/api/v1/workflows",
+        json={"name": "Review", "definition": {"steps": [
+            {"type": "manual_approval", "label": "Review"},
+            {"type": "log", "message": "This must not run"},
+        ]}},
+        headers=headers,
+    )
+    workflow_id = created.json()["id"]
+    client.post(f"/api/v1/workflows/{workflow_id}/enable", headers=headers)
+    run = client.post(f"/api/v1/workflows/{workflow_id}/runs", json={}, headers=headers).json()
+    rejected = client.post(
+        f"/api/v1/workflow-runs/{run['id']}/approval",
+        json={"approved": False, "comment": "Incomplete documentation"},
+        headers=headers,
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "failed"
+    assert rejected.json()["current_step"] == 0
+    assert len(rejected.json()["step_results"]) == 1
+
+
 def test_preview_requires_basic_authentication():
     assert client.get("/").status_code == 401
     assert client.get("/health/live").status_code == 200
