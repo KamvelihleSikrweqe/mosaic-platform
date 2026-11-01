@@ -62,7 +62,7 @@ function renderAuth(){
   const signedIn=Boolean(state.accessToken);
   action.textContent=signedIn?'Sign out':'Sign in';
   status.textContent=signedIn?'Signed in':'Authentication required';
-  $('#loadDemo').hidden=true;const demoLink=document.querySelector('nav a[href="/demo/suppliers"]');if(demoLink)demoLink.hidden=true;
+  $('#loadDemo').hidden=true;$('#newOrg').hidden=!signedIn;const demoLink=document.querySelector('nav a[href="/demo/suppliers"]');if(demoLink)demoLink.hidden=true;
   action.onclick=()=>signedIn?endLogin():startLogin().catch(e=>toast(e.message));
 }
 async function initAuth(){
