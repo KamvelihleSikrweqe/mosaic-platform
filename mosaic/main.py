@@ -807,6 +807,48 @@ def list_apps(org: Organisation = Depends(org_scope), db: Session = Depends(get_
     ]
 
 
+@app.get("/apps/{app_id}/preview")
+def application_preview(app_id: str):
+    """Serve the declarative application runtime shell; tenant access is checked by its API."""
+    return FileResponse(ROOT / "static" / "app-runtime.html")
+
+
+@app.get("/api/v1/apps/{app_id}/runtime", dependencies=[Depends(require_token)])
+def get_application_runtime(
+    app_id: str,
+    org: Organisation = Depends(org_scope),
+    db: Session = Depends(get_db),
+):
+    item = db.scalar(select(Application).where(
+        Application.id == app_id, Application.org_id == org.id
+    ))
+    if not item:
+        raise HTTPException(404, "Application not found")
+    config = item.config if isinstance(item.config, dict) else {}
+    objects = db.scalars(
+        select(DataObject).where(DataObject.org_id == org.id)
+    ).all()
+    object_index = {obj.key: {
+        "id": obj.id, "key": obj.key, "label": obj.label, "schema": obj.schema_json
+    } for obj in objects}
+    pages = config.get("pages", [])
+    if not isinstance(pages, list) or len(pages) > 30:
+        raise HTTPException(422, "Application pages must be an array with at most 30 entries")
+    for page in pages:
+        if not isinstance(page, dict) or page.get("type", "dashboard") not in {
+            "dashboard", "data-list", "data-form"
+        }:
+            raise HTTPException(422, "Unsupported application page. Supported types: dashboard, data-list, data-form")
+    return {
+        "id": item.id, "name": item.name, "description": item.description,
+        "status": item.status, "version": item.version,
+        "navigation": config.get("navigation", []),
+        "pages": pages,
+        "objects": object_index,
+        "organisation": {"id": org.id, "name": org.name},
+    }
+
+
 @app.post("/api/v1/apps/{app_id}/publish", dependencies=[Depends(require_token)])
 def publish_app(app_id: str, org: Organisation = Depends(org_scope), db: Session = Depends(get_db)):
     item = db.scalar(select(Application).where(Application.id == app_id, Application.org_id == org.id))

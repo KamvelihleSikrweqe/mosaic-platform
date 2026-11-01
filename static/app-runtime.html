@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MOSAIC Application</title><link rel="stylesheet" href="/static/app-runtime.css">
+</head>
+<body>
+  <div class="runtime-shell">
+    <aside class="runtime-sidebar">
+      <a class="runtime-brand" href="/">MOSAIC <span>RUNTIME</span></a>
+      <div class="runtime-org" id="runtimeOrg">Loading workspace…</div>
+      <nav id="runtimeNav" aria-label="Application navigation"></nav>
+      <a class="back-link" href="/">← Back to platform</a>
+    </aside>
+    <main class="runtime-main">
+      <div id="runtimeNotice" class="runtime-notice" hidden></div>
+      <header class="runtime-header"><div><div class="eyebrow" id="runtimeAppName">APPLICATION</div><h1 id="runtimePageTitle">Loading application…</h1><p id="runtimeDescription"></p></div><span id="runtimeVersion" class="version"></span></header>
+      <section id="runtimeContent" aria-live="polite"><div class="loading">Loading application workspace…</div></section>
+    </main>
+  </div>
+  <dialog id="recordDialog"><form id="recordForm"><div class="dialog-head"><div><div class="eyebrow">BUSINESS DATA</div><h2 id="recordDialogTitle">New record</h2></div><button type="button" class="close" id="recordClose" aria-label="Close">×</button></div><div id="recordFields" class="record-fields"></div><div class="dialog-actions"><button type="button" class="secondary" id="recordCancel">Cancel</button><button class="primary" type="submit">Save record</button></div></form></dialog>
+  <div id="runtimeToast" role="status" aria-live="polite"></div>
+  <script src="/static/app-runtime.js"></script>
+</body></html>

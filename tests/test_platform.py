@@ -50,6 +50,52 @@ def test_tenant_isolation_and_app_lifecycle():
     assert published.json()["status"] == "published"
 
 
+
+def test_application_runtime_manifest_is_tenant_scoped_and_validates_data_sources():
+    created = org("Runtime App Org", "runtime-app-org")
+    other = org("Other Runtime Org", "other-runtime-org")
+    headers = {**H, "X-Organisation-ID": created.json()["id"]}
+    other_headers = {**H, "X-Organisation-ID": other.json()["id"]}
+    model = client.post(
+        "/api/v1/objects",
+        json={"key": "supplier", "label": "Supplier", "schema": {
+            "type": "object", "properties": {"name": {"type": "string"}},
+            "required": ["name"], "additionalProperties": False,
+        }},
+        headers=headers,
+    )
+    assert model.status_code == 201, model.text
+    created_app = client.post(
+        "/api/v1/apps",
+        json={"name": "Supplier Workspace", "description": "Manage suppliers", "config": {
+            "navigation": ["Dashboard", "Suppliers"],
+            "pages": [
+                {"name": "Dashboard", "type": "dashboard"},
+                {"name": "Suppliers", "type": "data-list", "dataSource": "supplier"},
+            ],
+        }},
+        headers=headers,
+    )
+    assert created_app.status_code == 201, created_app.text
+    app_id = created_app.json()["id"]
+    runtime = client.get(f"/api/v1/apps/{app_id}/runtime", headers=headers)
+    assert runtime.status_code == 200, runtime.text
+    assert runtime.json()["status"] == "draft"
+    assert runtime.json()["objects"]["supplier"]["id"] == model.json()["id"]
+    assert len(runtime.json()["pages"]) == 2
+    assert client.get(f"/api/v1/apps/{app_id}/runtime", headers=other_headers).status_code == 404
+
+    invalid = client.post(
+        "/api/v1/apps",
+        json={"name": "Broken App", "config": {"pages": [
+            {"name": "Missing", "type": "data-list", "dataSource": "not_a_model"}
+        ]}},
+        headers=headers,
+    )
+    assert invalid.status_code == 201
+    assert client.get(f"/api/v1/apps/{invalid.json()['id']}/runtime", headers=headers).status_code == 200
+
+
 def test_workflow_definition_validation():
     a = org("Workflow Org", "workflow-org")
     assert a.status_code == 201
