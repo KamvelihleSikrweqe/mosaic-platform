@@ -50,8 +50,11 @@ Every release requires automated tests, dependency and container scanning, migra
 
 ## Next engineering gates after the Studio foundation
 
-- Complete browser end-to-end tests for Studio editing, data bindings and workflow actions.
-- [x] Add tenant-scoped deployment intent, immutable manifest digests and provider adapter contract.\n- Add provider workers that provision isolated runtime instances from immutable releases.
+- Complete authenticated browser end-to-end tests for Studio editing, data bindings and workflow actions.
+- [x] Add tenant-scoped deployment intent, immutable manifest digests and provider adapter contract.
+- [x] Add immutable release promotion and append-only rollback snapshots between logical environments.
+- [x] Integrate deployment planning, release promotion and rollback controls into Studio.
+- Add provider workers that provision isolated runtime instances from immutable releases.
 - Add environment-scoped configuration/secrets and signed artifacts before any customer-code execution.
-- Add rollback and release promotion with explicit approval and audit.
+- Add independent application URLs, custom domains, health checks, traffic switching and runtime rollback.
 - Harden production identity, PostgreSQL RLS, backups, observability and security testing before onboarding real tenants.

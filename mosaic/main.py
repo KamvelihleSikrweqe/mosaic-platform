@@ -129,6 +129,11 @@ class DeploymentIn(BaseModel):
     target: str = Field(default="local", min_length=1, max_length=120, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._:-]*$")
 
 
+class ReleasePromotionIn(BaseModel):
+    source_release_id: str = Field(min_length=36, max_length=36)
+    target_environment: str = Field(pattern=r"^(development|staging|production)$")
+
+
 class WorkflowIn(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     definition: dict = Field(default_factory=dict)
@@ -1155,6 +1160,105 @@ def get_application_deployment(
         raise HTTPException(404, "Application deployment not found")
     return deployment_payload(deployment)
 
+
+
+@app.post("/api/v1/apps/{app_id}/promotions", dependencies=[Depends(require_token)], status_code=201)
+def promote_application_release(
+    app_id: str, payload: ReleasePromotionIn,
+    org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    """Copy an immutable release snapshot into another logical environment."""
+    app_item = db.scalar(select(Application).where(
+        Application.id == app_id, Application.org_id == org.id
+    ))
+    if not app_item:
+        raise HTTPException(404, "Application not found")
+    source = db.scalar(select(ApplicationRelease).where(
+        ApplicationRelease.id == payload.source_release_id,
+        ApplicationRelease.app_id == app_id,
+        ApplicationRelease.org_id == org.id,
+        ApplicationRelease.status == "ready",
+    ))
+    if not source:
+        raise HTTPException(404, "Ready source release not found")
+    if source.environment == payload.target_environment:
+        raise HTTPException(409, "Source and target environments must differ")
+    app_item.version += 1
+    promoted = ApplicationRelease(
+        id=str(uuid4()), org_id=org.id, app_id=app_id,
+        version=app_item.version, environment=payload.target_environment,
+        status="ready", manifest=source.manifest,
+    )
+    db.add(promoted)
+    if payload.target_environment == "production":
+        app_item.status = "published"
+    audit(db, org.id, "application.release_promoted", "application_release", promoted.id, {
+        "app_id": app_id, "source_release_id": source.id,
+        "source_environment": source.environment,
+        "target_environment": payload.target_environment,
+        "version": promoted.version,
+    })
+    db.commit()
+    return {
+        "id": promoted.id, "app_id": app_id, "version": promoted.version,
+        "environment": promoted.environment, "status": promoted.status,
+        "source_release_id": source.id,
+    }
+
+
+@app.post("/api/v1/apps/{app_id}/environments/{environment}/rollback", dependencies=[Depends(require_token)], status_code=201)
+def rollback_application_environment(
+    app_id: str, environment: str, payload: ReleasePromotionIn,
+    org: Organisation = Depends(org_scope), db: Session = Depends(get_db),
+):
+    """Create a new release from a previous snapshot; never mutate release history."""
+    if environment not in {"development", "staging", "production"}:
+        raise HTTPException(422, "Unsupported environment")
+    if payload.target_environment != environment:
+        raise HTTPException(422, "Target environment must match the environment in the URL")
+    app_item = db.scalar(select(Application).where(
+        Application.id == app_id, Application.org_id == org.id
+    ))
+    if not app_item:
+        raise HTTPException(404, "Application not found")
+    source = db.scalar(select(ApplicationRelease).where(
+        ApplicationRelease.id == payload.source_release_id,
+        ApplicationRelease.app_id == app_id,
+        ApplicationRelease.org_id == org.id,
+        ApplicationRelease.status == "ready",
+    ))
+    if not source:
+        raise HTTPException(404, "Ready rollback source release not found")
+    current = db.scalar(select(ApplicationRelease).where(
+        ApplicationRelease.app_id == app_id,
+        ApplicationRelease.org_id == org.id,
+        ApplicationRelease.environment == environment,
+        ApplicationRelease.status == "ready",
+    ).order_by(ApplicationRelease.version.desc()))
+    if not current:
+        raise HTTPException(409, "Environment has no release to roll back")
+    if source.id == current.id:
+        raise HTTPException(409, "Selected release is already the current environment version")
+    app_item.version += 1
+    rollback_release = ApplicationRelease(
+        id=str(uuid4()), org_id=org.id, app_id=app_id,
+        version=app_item.version, environment=environment,
+        status="ready", manifest=source.manifest,
+    )
+    db.add(rollback_release)
+    if environment == "production":
+        app_item.status = "published"
+    audit(db, org.id, "application.release_rolled_back", "application_release", rollback_release.id, {
+        "app_id": app_id, "source_release_id": source.id,
+        "previous_release_id": current.id, "environment": environment,
+        "version": rollback_release.version,
+    })
+    db.commit()
+    return {
+        "id": rollback_release.id, "app_id": app_id, "version": rollback_release.version,
+        "environment": environment, "status": rollback_release.status,
+        "source_release_id": source.id, "rolled_back_from": current.id,
+    }
 
 def validate_workflow_definition(definition: dict):
     steps = definition.get("steps", [])

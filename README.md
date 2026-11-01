@@ -74,7 +74,7 @@ Open an application and choose **Design** to launch MOSAIC Studio. Add pages and
 
 Application manifests use `schemaVersion: "1.0"`. A page can contain up to 100 components; an application can contain up to 30 pages. Only registered component types and the allow-listed `workflow.run` action are accepted. The runtime never evaluates manifest-supplied JavaScript or HTML.
 
-The release API stores immutable manifest snapshots for `development`, `staging` and `production`. A production release updates application lifecycle status to published. These are logical release records within the existing MOSAIC service; they do **not** provision isolated compute, a custom domain, independent infrastructure or automated rollback. Environment-specific secrets/configuration, artifact signing, deployment orchestration and rollback are future work.
+The release API stores immutable manifest snapshots for `development`, `staging` and `production`. Releases can be promoted across logical environments, and rollback creates a new immutable snapshot from a selected historical release. Studio can record deployment plans and inspect deployment history. The initial Docker adapter computes a manifest digest but deliberately does **not** provision isolated compute, issue URLs, execute customer code or claim runtime health. See `docs/DEPLOYMENT_ENGINE.md`. Environment-specific secrets/configuration, artifact signing, a provider worker, independent infrastructure and actual runtime rollback remain future work.
 
 ### Python SDK and CLI
 
