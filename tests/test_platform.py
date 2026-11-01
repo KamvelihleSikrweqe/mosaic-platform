@@ -155,6 +155,28 @@ def test_application_studio_manifest_editing_and_environment_releases():
     assert production.json()["version"] == 4
     releases = client.get(f"/api/v1/apps/{app_id}/releases", headers=headers)
     assert {item["environment"] for item in releases.json()} == {"staging", "production"}
+    # Editing a published app creates a draft; default runtime continues to serve
+    # the immutable production snapshot until another production release is made.
+    draft = client.put(f"/api/v1/apps/{app_id}", json={
+        "expected_version": 4, "config": {
+            "schemaVersion": "1.0",
+            "pages": [{"id": "home", "name": "Home", "type": "dashboard", "components": [
+                {"id": "heading-1", "type": "heading", "props": {"text": "Unreleased draft"}}
+            ]}],
+        },
+    }, headers=headers)
+    assert draft.status_code == 200, draft.text
+    assert draft.json()["status"] == "draft"
+    live_runtime = client.get(f"/api/v1/apps/{app_id}/runtime", headers=headers)
+    assert live_runtime.json()["status"] == "published"
+    assert live_runtime.json()["version"] == 4
+    assert live_runtime.json()["pages"][0]["components"][0]["props"]["text"] == "Supplier operations"
+    draft_runtime = client.get(
+        f"/api/v1/apps/{app_id}/runtime?preview=true", headers=headers
+    )
+    assert draft_runtime.json()["status"] == "draft"
+    assert draft_runtime.json()["pages"][0]["components"][0]["props"]["text"] == "Unreleased draft"
+
 
 
 def test_application_manifest_rejects_unregistered_components_and_unapproved_actions():
