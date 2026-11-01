@@ -11,7 +11,10 @@ MOSAIC is an open-source project exploring a programmable operating environment 
 - Create, list, retrieve, update and delete records against those schemas.
 - Scope data-object and record queries by the selected organisation.
 - Create applications, preview them in a declarative runtime, and manage draft-to-published lifecycle metadata.
+- Design applications in MOSAIC Studio using a reusable component palette, data bindings and governed workflow actions.
 - Render dashboard, data-list and data-form pages against organisation-scoped data models; create, edit and delete validated business records from the application UI.
+- Save versioned manifests and create immutable development, staging and production release snapshots.
+- Use the dependency-free Python SDK and `mosaic` CLI to validate, export, push and release application manifests.
 - Execute bounded, organisation-scoped workflows with persisted run history, idempotency keys, log steps and human approval gates.
 - Record application-level audit events.
 - Use a responsive browser UI, REST API and OpenAPI docs.
@@ -63,6 +66,32 @@ curl -X POST http://localhost:8000/api/v1/organisations \
 ~~~
 
 Use the returned organisation ID as the `X-Organisation-ID` header. Create a data object, then create records at `POST /api/v1/objects/{object_id}/records` with a JSON body such as `{"data":{"name":"Example Supplier"}}`.
+
+
+## Application Studio and releases
+
+Open an application and choose **Design** to launch MOSAIC Studio. Add pages and components, bind data components to organisation data models, and attach buttons to enabled workflows. Save uses optimistic version checking. The current component registry includes headings, text, metrics, data tables, data forms and governed workflow buttons.
+
+Application manifests use `schemaVersion: "1.0"`. A page can contain up to 100 components; an application can contain up to 30 pages. Only registered component types and the allow-listed `workflow.run` action are accepted. The runtime never evaluates manifest-supplied JavaScript or HTML.
+
+The release API stores immutable manifest snapshots for `development`, `staging` and `production`. A production release updates application lifecycle status to published. These are logical release records within the existing MOSAIC service; they do **not** provision isolated compute, a custom domain, independent infrastructure or automated rollback. Environment-specific secrets/configuration, artifact signing, deployment orchestration and rollback are future work.
+
+### Python SDK and CLI
+
+Install from the repository root with `pip install .`. Configure one of:
+- `MOSAIC_TOKEN` for a bearer access token; or
+- `MOSAIC_USERNAME` and `MOSAIC_PASSWORD` for the single-operator preview Basic Auth.
+
+Also set `MOSAIC_URL` (defaults to `http://localhost:8000`) and `MOSAIC_ORG_ID`.
+
+```bash
+mosaic validate app.json
+mosaic export --app-id APP_ID --output app.json
+mosaic push --app-id APP_ID --file app.json
+mosaic release --app-id APP_ID --environment staging
+```
+
+The CLI is a developer utility, not a replacement for authenticated server-side policy checks.
 
 ## Health endpoints
 
