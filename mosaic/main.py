@@ -169,6 +169,117 @@ def platform():
     }
 
 
+@app.post("/api/v1/demo/supplier-onboarding", dependencies=[Depends(require_token)])
+def load_supplier_onboarding_demo(db: Session = Depends(get_db)):
+    """Create or reuse a complete, fictional supplier-onboarding demo workspace."""
+    org = db.scalar(select(Organisation).where(Organisation.slug == "mosaic-demo"))
+    if not org:
+        org = Organisation(id=str(uuid4()), name="MOSAIC Demo Workspace", slug="mosaic-demo")
+        db.add(org)
+        db.flush()
+        audit(db, org.id, "organisation.created", "organisation", org.id, {"source": "demo_seed"})
+
+    schema = {
+        "type": "object",
+        "required": ["company_name", "email", "status"],
+        "properties": {
+            "company_name": {"type": "string", "minLength": 2},
+            "email": {"type": "string", "format": "email"},
+            "registration_number": {"type": "string"},
+            "contact_person": {"type": "string"},
+            "status": {"type": "string", "enum": ["pending", "approved", "rejected"]},
+        },
+        "additionalProperties": False,
+    }
+    obj = db.scalar(select(DataObject).where(
+        DataObject.org_id == org.id, DataObject.key == "supplier"
+    ))
+    if not obj:
+        obj = DataObject(
+            id=str(uuid4()), org_id=org.id, key="supplier",
+            label="Supplier", schema_json=schema,
+        )
+        db.add(obj)
+        db.flush()
+        audit(db, org.id, "object.created", "data_object", obj.id, {"key": "supplier"})
+
+    app_item = db.scalar(select(Application).where(
+        Application.org_id == org.id, Application.name == "Supplier Onboarding Portal"
+    ))
+    if not app_item:
+        app_item = Application(
+            id=str(uuid4()), org_id=org.id, name="Supplier Onboarding Portal",
+            description="Register and manage suppliers through an approval process.",
+            config={
+                "navigation": ["Dashboard", "Suppliers", "Approvals"],
+                "pages": [
+                    {"name": "Dashboard", "type": "dashboard"},
+                    {"name": "Suppliers", "type": "data-list", "dataSource": "supplier"},
+                    {"name": "Register Supplier", "type": "data-form", "dataSource": "supplier"},
+                ],
+            },
+            status="draft",
+        )
+        db.add(app_item)
+        db.flush()
+        audit(db, org.id, "application.created", "application", app_item.id, {"source": "demo_seed"})
+
+    workflow = db.scalar(select(Workflow).where(
+        Workflow.org_id == org.id, Workflow.name == "Supplier Approval Workflow"
+    ))
+    if not workflow:
+        workflow = Workflow(
+            id=str(uuid4()), org_id=org.id, name="Supplier Approval Workflow",
+            definition={"steps": [
+                {"type": "manual_approval", "label": "Review supplier application"},
+                {"type": "log", "message": "Supplier approval completed"},
+            ]},
+            enabled=False,
+        )
+        db.add(workflow)
+        db.flush()
+        audit(db, org.id, "workflow.created", "workflow", workflow.id, {"source": "demo_seed"})
+
+    examples = [
+        {
+            "company_name": "Acme Office Supplies",
+            "email": "onboarding@acme.example",
+            "registration_number": "DEMO-REG-001",
+            "contact_person": "Jordan Example",
+            "status": "pending",
+        },
+        {
+            "company_name": "Cape Digital Services",
+            "email": "suppliers@capedigital.example",
+            "registration_number": "DEMO-REG-002",
+            "contact_person": "Taylor Example",
+            "status": "approved",
+        },
+    ]
+    existing = db.scalars(select(DataRecord).where(
+        DataRecord.org_id == org.id, DataRecord.object_id == obj.id
+    )).all()
+    existing_names = {r.data.get("company_name") for r in existing}
+    created_records = 0
+    for data in examples:
+        if data["company_name"] not in existing_names:
+            record = DataRecord(id=str(uuid4()), org_id=org.id, object_id=obj.id, data=data)
+            db.add(record)
+            db.flush()
+            audit(db, org.id, "record.created", "data_record", record.id, {"object_key": "supplier", "source": "demo_seed"})
+            created_records += 1
+
+    db.commit()
+    return {
+        "organisation": {"id": org.id, "name": org.name, "slug": org.slug},
+        "data_object": {"id": obj.id, "key": obj.key, "label": obj.label},
+        "application": {"id": app_item.id, "name": app_item.name, "status": app_item.status},
+        "workflow": {"id": workflow.id, "name": workflow.name, "enabled": workflow.enabled},
+        "records_created": created_records,
+        "message": "Supplier onboarding demo is ready. Re-running this action will reuse existing resources.",
+    }
+
+
 @app.post("/api/v1/organisations", dependencies=[Depends(require_token)], status_code=201)
 def create_org(payload: OrgIn, db: Session = Depends(get_db)):
     if db.scalar(select(Organisation).where(Organisation.slug == payload.slug)):
