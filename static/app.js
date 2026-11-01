@@ -55,17 +55,27 @@ function openModal(kind){
     workflow:{title:'Create workflow',fields:field('Workflow name','name','Supplier approval')+'<label>Workflow definition <span class="hint">Definitions are stored, not executed, in this preview.</span><textarea name="definition" required>{"steps":[{"type":"manual_approval","label":"Review request"},{"type":"log","message":"Approved"}]}</textarea></label>',save:'Create workflow'}
   };
   const config=configs[kind];$('#modalTitle').textContent=config.title;$('#fields').innerHTML=config.fields;
-  $('#save').textContent=config.save;$('#modalForm').dataset.kind=kind;$('#modal').showModal();
+  $('#save').textContent=config.save;$('#modalForm').dataset.kind=kind;$('#modalForm').dataset.saveLabel=config.save;
+  if(kind==='org'){
+    const name=$('#fields input[name="name"]'),slug=$('#fields input[name="slug"]');
+    slug.pattern='[a-z0-9][a-z0-9-]{0,79}';slug.title='Use lowercase letters, numbers and hyphens; start with a letter or number.';
+    name.addEventListener('input',()=>{if(!slug.dataset.edited)slug.value=name.value.trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,80);});
+    slug.addEventListener('input',()=>{slug.dataset.edited='true';});
+  }
+  $('#modal').showModal();
 }
-$('#modalForm').addEventListener('submit',async event=>{
-  if(event.submitter?.value==='cancel')return;
-  event.preventDefault();const kind=event.currentTarget.dataset.kind;
-  const values=Object.fromEntries(new FormData(event.currentTarget).entries());
-  const save=$('#save');save.disabled=true;
+let savingModal=false;
+async function saveModal(){
+  const form=$('#modalForm'),kind=form.dataset.kind,save=$('#save');
+  if(savingModal||!form.reportValidity())return;
+  const values=Object.fromEntries(new FormData(form).entries());
+  savingModal=true;save.disabled=true;save.textContent='Creating…';
   try{
     if(kind==='org'){
       const created=await api('/organisations',{method:'POST',body:JSON.stringify(values)});
-      state.org=created.id;await loadOrgs();
+      state.org=created.id;
+      await loadOrgs();
+      $('#orgSelect').value=created.id;
     }else if(kind==='object'){
       values.schema=JSON.parse(values.schema);await api('/objects',{method:'POST',body:JSON.stringify(values)});
     }else if(kind==='app'){
@@ -73,10 +83,14 @@ $('#modalForm').addEventListener('submit',async event=>{
     }else{
       values.definition=JSON.parse(values.definition);await api('/workflows',{method:'POST',body:JSON.stringify(values)});
     }
-    $('#modal').close();await refresh();toast('Created successfully.');
+    $('#modal').close();await refresh();toast(kind==='org'?'Organisation created successfully.':'Created successfully.');
   }catch(error){toast(error.message);}
-  finally{save.disabled=false;}
-});
+  finally{savingModal=false;save.disabled=false;save.textContent=form.dataset.saveLabel||'Create';}
+}
+$('#modalForm').addEventListener('submit',event=>{event.preventDefault();saveModal();});
+$('#save').addEventListener('click',event=>{event.preventDefault();saveModal();});
+$('#modalClose').addEventListener('click',()=>$('#modal').close());
+document.querySelectorAll('[data-modal-cancel]').forEach(button=>button.addEventListener('click',()=>$('#modal').close()));
 $('#newOrg').addEventListener('click',()=>openModal('org'));
 $('#quickApp').addEventListener('click',()=>openModal('app'));
 document.querySelectorAll('[data-action]').forEach(button=>button.addEventListener('click',()=>openModal(button.dataset.action)));
